@@ -653,19 +653,46 @@ checkbox_menu() {
   n=${#ids[@]}
   tty_ok || return 1
 
+  local width=62 inner=$((62 - 2)) title="What should be set up?" info="space to select · enter to run"
+  local dash dashlen plain colored pad vis
+
   STTY_SAVED=$(stty -g </dev/tty)
   stty -echo -icanon min 0 time 1 </dev/tty
   printf '\033[?25l' >/dev/tty
 
   while true; do
-    printf '\033[2K %sChoose what to set up%s  %sspace toggles, enter runs, q skips%s\n' \
-      "$C_BOLD" "$C_OFF" "$C_DIM" "$C_OFF" >/dev/tty
+    dashlen=$((width - 4 - ${#title}))
+    (( dashlen < 1 )) && dashlen=1
+    printf -v dash '%*s' "$dashlen" ''
+    dash="${dash// /─}"
+    printf ' %s┌ %s%s%s %s┐%s\n' "$C_CYAN" "$C_BOLD" "$title" "$C_OFF$C_CYAN" "$dash" "$C_OFF" >/dev/tty
+
     for i in "${!ids[@]}"; do
-      local mark=" " box=" "
-      (( on[i] )) && box="x"
-      (( i == cur )) && mark=">"
-      printf '\033[2K %s%s%s [%s] %s\n' "$C_CYAN" "$mark" "$C_OFF" "$box" "${labels[$i]}" >/dev/tty
+      if (( i == cur && on[i] )); then
+        plain="› ◼ ${labels[$i]}"
+        colored="${C_CYAN}› ◼${C_OFF} ${labels[$i]}"
+      elif (( i == cur )); then
+        plain="› ◻ ${labels[$i]}"
+        colored="${C_CYAN}›${C_OFF} ◻ ${labels[$i]}"
+      elif (( on[i] )); then
+        plain=" ◼ ${labels[$i]}"
+        colored=" ${C_CYAN}◼${C_OFF} ${C_DIM}${labels[$i]}${C_OFF}"
+      else
+        plain=" ◻ ${labels[$i]}"
+        colored=" ${C_DIM}◻ ${labels[$i]}${C_OFF}"
+      fi
+      vis=$(visible_len "$colored")
+      pad=$((inner - 1 - vis))
+      (( pad < 0 )) && pad=0
+      printf ' %s│%s %s%*s%s│%s\n' "$C_CYAN" "$C_OFF" "$colored" "$pad" '' "$C_CYAN" "$C_OFF" >/dev/tty
     done
+
+    vis=${#info}
+    dashlen=$((width - 5 - vis))
+    (( dashlen < 1 )) && dashlen=1
+    printf -v dash '%*s' "$dashlen" ''
+    dash="${dash// /─}"
+    printf ' %s└─ %s%s%s %s┘%s\n' "$C_CYAN" "$C_DIM" "$info" "$C_OFF$C_CYAN" "$dash" "$C_OFF" >/dev/tty
 
     key=""
     while [[ -z "$key" ]]; do
@@ -698,7 +725,7 @@ checkbox_menu() {
         return 0
         ;;
     esac
-    printf '\033[%dA' $((n + 1)) >/dev/tty
+    printf '\033[%dA' $((n + 2)) >/dev/tty
   done
 }
 
