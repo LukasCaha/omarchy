@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Omarchy checklist. Safe to re-run.
-# The only write is the Chromium Bookmarks file, to or from Vault.
+# Checks first. Offers checkboxes only for what is missing:
+# Dropbox and Vault, Chromium, Bitwarden, then the rest of Dropbox.
+# Writes the Chromium Bookmarks file to or from Vault, and a Chromium
+# policy that force-installs uBlock Origin Lite.
 # curl -fsSL https://raw.githubusercontent.com/LukasCaha/omarchy/main/bootstrap.sh | sh
 #
 # Public repo may later track only reviewed overlays:
@@ -33,7 +36,15 @@ PASS_N=0
 WARN_N=0
 FAIL_N=0
 
-cleanup() { printf '%s\033[?25h' "$C_OFF"; }
+STTY_SAVED=""
+restore_tty() {
+  if [[ -n "$STTY_SAVED" ]]; then
+    stty "$STTY_SAVED" </dev/tty 2>/dev/null || stty sane </dev/tty 2>/dev/null || true
+    STTY_SAVED=""
+  fi
+  printf '\033[?25h' >/dev/tty 2>/dev/null || true
+}
+cleanup() { restore_tty; printf '%s' "$C_OFF"; }
 trap cleanup EXIT INT TERM
 
 GRADIENTS=(
@@ -75,7 +86,7 @@ header() {
     fi
   done
   printf '\n'
-  printf ' %s INFO %s Re-run anytime. Bookmarks move only as a file through Vault.\n\n' "${C_INFO}${C_BOLD}" "$C_OFF"
+  printf ' %s INFO %s Checks first. Checkboxes appear only for what is missing.\n\n' "${C_INFO}${C_BOLD}" "$C_OFF"
 }
 
 section() {
@@ -142,6 +153,69 @@ callout() {
   printf ' %s└%s┘%s\n\n' "$C_CYAN" "$dash" "$C_OFF"
 }
 
+tty_ok() { [[ -r /dev/tty && -w /dev/tty ]]; }
+
+pause_tty() {
+  tty_ok || return 1
+  printf '   %s%s%s' "$C_DIM" "$1" "$C_OFF" >/dev/tty
+  read -r _ </dev/tty || return 1
+}
+
+bitwarden_ready() {
+  local f="$HOME/.config/Bitwarden/data.json"
+  command -v bitwarden >/dev/null 2>&1 && [[ -f "$f" ]] && grep -q '"userId"' "$f" 2>/dev/null
+}
+
+dropbox_client_ready() {
+  command -v dropbox >/dev/null 2>&1 || [[ -x "$HOME/.dropbox-dist/dropboxd" ]]
+}
+
+dropbox_running() {
+  pgrep -f 'dropbox-lnx' >/dev/null 2>&1 || pgrep -x dropbox >/dev/null 2>&1
+}
+
+vault_ready() { [[ -d "$HOME/Dropbox/Vault" ]]; }
+
+dropbox_rest_ready() {
+  local d
+  for d in Notes Resources Documents Images Personal; do
+    [[ -d "$HOME/Dropbox/$d" ]] || return 1
+  done
+}
+
+ublock_ready() {
+  local id="ddkjiahejlhfcafbddmgiahcphecmpfh"
+  local prefs="$HOME/.config/chromium/Default/Preferences"
+  [[ -f "$prefs" ]] && grep -q "$id" "$prefs" 2>/dev/null
+}
+
+chromium_ready() {
+  command -v chromium >/dev/null 2>&1 || return 1
+  ublock_ready || return 1
+  (( $(bookmark_urls "$HOME/.config/chromium/Default/Bookmarks") > 0 ))
+}
+
+start_dropbox() {
+  dropbox_running && return 0
+  if [[ -x "$HOME/.dropbox-dist/dropboxd" ]]; then
+    setsid "$HOME/.dropbox-dist/dropboxd" >/dev/null 2>&1 &
+  elif command -v dropbox >/dev/null 2>&1; then
+    setsid dropbox start >/dev/null 2>&1 &
+  fi
+}
+
+check_bitwarden() {
+  section "Bitwarden"
+  if ! command -v bitwarden >/dev/null 2>&1; then
+    row fail "Bitwarden" "not installed"
+  elif bitwarden_ready; then
+    row pass "Bitwarden login" "account is on this machine"
+  else
+    row fail "Bitwarden login" "not logged in"
+  fi
+  printf '\n'
+}
+
 age_days() {
   local f="$1" now mtime
   [[ -e "$f" ]] || { echo 9999; return; }
@@ -152,28 +226,24 @@ age_days() {
 
 check_dropbox() {
   section "Dropbox"
-  local client=0 running=0
-  if command -v dropbox >/dev/null 2>&1 || [[ -x "$HOME/.dropbox-dist/dropboxd" ]]; then
-    client=1
-  fi
-  if pgrep -f 'dropbox-lnx' >/dev/null 2>&1 || pgrep -x dropbox >/dev/null 2>&1; then
-    running=1
-  fi
-
-  if (( client && running )); then
+  if dropbox_client_ready && dropbox_running; then
     row pass "Dropbox client" "running"
-  elif (( client )); then
+  elif dropbox_client_ready; then
     row warn "Dropbox client" "installed, not running"
   else
     row fail "Dropbox client" "not installed"
   fi
 
-  if [[ -d "$HOME/Dropbox/Vault" && -d "$HOME/Dropbox/Notes" ]]; then
-    row pass "Vault and Notes" "synced locally"
-  elif [[ -d "$HOME/Dropbox" ]]; then
-    row warn "Vault and Notes" "Dropbox is here, those folders are not"
+  if vault_ready; then
+    row pass "Vault" "synced locally"
   else
-    row fail "Vault and Notes" "sign in to Dropbox first"
+    row fail "Vault" "not on this machine"
+  fi
+
+  if dropbox_rest_ready; then
+    row pass "Rest of Dropbox" "Notes, Resources, Documents, Images, Personal"
+  else
+    row fail "Rest of Dropbox" "working folders are not all here"
   fi
   printf '\n'
 }
@@ -321,39 +391,61 @@ check_browser() {
     return
   fi
 
-  if [[ ! -d "$HOME/Dropbox/Vault" ]]; then
-    row fail "Bookmark copy" "Vault is not on this machine"
-    printf '\n'
-    return
-  fi
-
   local_n=$(bookmark_urls "$local_file")
   vault_n=$(bookmark_urls "$vault_file")
 
   if (( local_n > 0 )); then
-    if [[ ! -f "$vault_file" ]] || [[ "$local_file" -nt "$vault_file" ]]; then
-      mkdir -p "$(dirname "$vault_file")"
-      cp -a "$local_file" "$vault_file"
-      row pass "Bookmark copy" "$local_n urls saved in Vault"
-    else
-      row pass "Bookmark copy" "$local_n urls in the profile, Vault is current"
-    fi
-    printf '\n'
+    row pass "Bookmarks" "$local_n urls in the profile"
+  elif (( vault_n > 0 )); then
+    row fail "Bookmarks" "$vault_n urls in Vault, profile is empty"
+  else
+    row fail "Bookmarks" "none in the profile or in Vault"
+  fi
+
+  if ublock_ready; then
+    row pass "uBlock Origin Lite" "installed"
+  else
+    row fail "uBlock Origin Lite" "not installed"
+  fi
+  printf '\n'
+}
+
+# Chromium 151 cannot run classic uBlock Origin. Lite is the current
+# extension from the same author. The id is public; the extension itself
+# is fetched from the Chrome Web Store when Chromium starts.
+ensure_ublock() {
+  local id="ddkjiahejlhfcafbddmgiahcphecmpfh"
+  local policy_dir="/etc/chromium/policies/managed"
+  local policy_file="$policy_dir/ublock.json"
+  local update_url="https://clients2.google.com/service/update2/crx"
+  local wanted="${id};${update_url}"
+  local prefs="$HOME/.config/chromium/Default/Preferences"
+  local installed=0
+
+  if [[ -f "$prefs" ]] && grep -q "$id" "$prefs" 2>/dev/null; then
+    installed=1
+  fi
+
+  if [[ ! -d "$policy_dir" || ! -w "$policy_dir" ]]; then
+    row warn "uBlock Origin Lite" "Chromium policy directory is not writable"
     return
   fi
 
-  if (( vault_n > 0 )); then
-    if pgrep -x chromium >/dev/null 2>&1; then
-      row warn "Bookmark copy" "quit Chromium, then re-run to restore $vault_n urls"
-    else
-      mkdir -p "$(dirname "$local_file")"
-      cp -a "$vault_file" "$local_file"
-      row pass "Bookmark copy" "$vault_n urls restored from Vault"
-    fi
-  else
-    row fail "Bookmark copy" "no bookmarks in the profile or in Vault"
+  if [[ ! -f "$policy_file" ]] || ! grep -q "$id" "$policy_file" 2>/dev/null; then
+    cat >"$policy_file" <<EOF
+{
+  "ExtensionInstallForcelist": [
+    "${wanted}"
+  ]
+}
+EOF
   fi
-  printf '\n'
+
+  if (( installed )); then
+    row pass "uBlock Origin Lite" "installed"
+  else
+    row warn "uBlock Origin Lite" "policy is set; restart Chromium to install it"
+  fi
 }
 
 check_keybinds() {
@@ -425,15 +517,229 @@ check_configs() {
   printf '\n'
 }
 
+do_vault() {
+  section "Dropbox and Vault"
+  if ! dropbox_client_ready; then
+    sudo pacman -S --needed --noconfirm dropbox </dev/tty
+  fi
+  start_dropbox
+  if vault_ready; then
+    row pass "Vault" "synced locally"
+    printf '\n'
+    return
+  fi
+  if pause_tty "Sign in to Dropbox and sync only Vault. Press Enter when ~/Dropbox/Vault is here. "; then
+    if vault_ready; then
+      row pass "Vault" "synced locally"
+    else
+      row warn "Vault" "still missing"
+    fi
+  else
+    row warn "Vault" "sign in, then re-run"
+  fi
+  printf '\n'
+}
+
+do_dropbox_rest() {
+  section "Rest of Dropbox"
+  start_dropbox
+  if dropbox_rest_ready; then
+    row pass "Rest of Dropbox" "working folders are here"
+    printf '\n'
+    return
+  fi
+  if pause_tty "Turn on Notes, Resources, Documents, Images, and Personal. Leave Archive in the cloud. Press Enter when they are here. "; then
+    if dropbox_rest_ready; then
+      row pass "Rest of Dropbox" "working folders are here"
+    else
+      row warn "Rest of Dropbox" "some working folders are still missing"
+    fi
+  else
+    row warn "Rest of Dropbox" "turn the folders on, then re-run"
+  fi
+  printf '\n'
+}
+
+sync_bookmarks() {
+  local local_file="$HOME/.config/chromium/Default/Bookmarks"
+  local vault_file="$HOME/Dropbox/Vault/browser/chromium/Bookmarks"
+  local local_n vault_n
+  local_n=$(bookmark_urls "$local_file")
+  vault_n=$(bookmark_urls "$vault_file")
+
+  if (( local_n > 0 )); then
+    if [[ ! -d "$HOME/Dropbox/Vault" ]]; then
+      row warn "Bookmarks" "$local_n urls in the profile, Vault is not here"
+    elif [[ ! -f "$vault_file" ]] || [[ "$local_file" -nt "$vault_file" ]]; then
+      mkdir -p "$(dirname "$vault_file")"
+      cp -a "$local_file" "$vault_file"
+      row pass "Bookmarks" "$local_n urls saved in Vault"
+    else
+      row pass "Bookmarks" "$local_n urls in the profile"
+    fi
+    return
+  fi
+
+  if (( vault_n > 0 )); then
+    if pgrep -x chromium >/dev/null 2>&1; then
+      row warn "Bookmarks" "quit Chromium, then re-run to restore $vault_n urls"
+    else
+      mkdir -p "$(dirname "$local_file")"
+      cp -a "$vault_file" "$local_file"
+      row pass "Bookmarks" "$vault_n urls restored from Vault"
+    fi
+  else
+    row fail "Bookmarks" "none in the profile or in Vault"
+  fi
+}
+
+do_chromium() {
+  section "Chromium"
+  if ! command -v chromium >/dev/null 2>&1; then
+    sudo pacman -S --needed --noconfirm chromium </dev/tty
+  fi
+  sync_bookmarks
+  ensure_ublock
+  printf '\n'
+}
+
+do_bitwarden() {
+  section "Bitwarden"
+  if ! command -v bitwarden >/dev/null 2>&1; then
+    sudo pacman -S --needed --noconfirm bitwarden </dev/tty
+  fi
+  if ! command -v bitwarden >/dev/null 2>&1; then
+    row fail "Bitwarden" "not installed"
+    printf '\n'
+    return
+  fi
+  if ! pgrep -x bitwarden >/dev/null 2>&1; then
+    setsid bitwarden >/dev/null 2>&1 &
+  fi
+  if bitwarden_ready; then
+    row pass "Bitwarden login" "account is on this machine"
+    printf '\n'
+    return
+  fi
+  if pause_tty "Log in to Bitwarden and unlock the vault. Press Enter when that is done. "; then
+    if bitwarden_ready; then
+      row pass "Bitwarden login" "account is on this machine"
+    else
+      row warn "Bitwarden login" "Bitwarden is open; the account is not saved yet"
+    fi
+  else
+    row warn "Bitwarden login" "log in, then re-run"
+  fi
+  printf '\n'
+}
+
+checkbox_menu() {
+  local -a ids=("$@")
+  local -a labels=()
+  local -a on=()
+  local id label i cur=0 n key
+  CHOSEN=()
+  for id in "${ids[@]}"; do
+    case "$id" in
+      vault) label="Dropbox and Vault" ;;
+      chromium) label="Chromium bookmarks and uBlock" ;;
+      bitwarden) label="Bitwarden" ;;
+      dropbox_rest) label="Rest of Dropbox" ;;
+      *) label="$id" ;;
+    esac
+    labels+=("$label")
+    on+=(1)
+  done
+  n=${#ids[@]}
+  tty_ok || return 1
+
+  STTY_SAVED=$(stty -g </dev/tty)
+  stty -echo -icanon min 0 time 1 </dev/tty
+  printf '\033[?25l' >/dev/tty
+
+  while true; do
+    printf '\033[2K %sChoose what to set up%s  %sspace toggles, enter runs, q skips%s\n' \
+      "$C_BOLD" "$C_OFF" "$C_DIM" "$C_OFF" >/dev/tty
+    for i in "${!ids[@]}"; do
+      local mark=" " box=" "
+      (( on[i] )) && box="x"
+      (( i == cur )) && mark=">"
+      printf '\033[2K %s%s%s [%s] %s\n' "$C_CYAN" "$mark" "$C_OFF" "$box" "${labels[$i]}" >/dev/tty
+    done
+
+    key=""
+    while [[ -z "$key" ]]; do
+      IFS= read -rsn1 key </dev/tty || true
+    done
+    if [[ "$key" == $'\e' ]]; then
+      local rest a b
+      IFS= read -rsn1 -t 0.05 a </dev/tty || a=""
+      IFS= read -rsn1 -t 0.05 b </dev/tty || b=""
+      rest="${a}${b}"
+      key+="$rest"
+    fi
+
+    case "$key" in
+      j|$'\e[B') cur=$(( (cur + 1) % n )) ;;
+      k|$'\e[A') cur=$(( (cur + n - 1) % n )) ;;
+      ' ') on[cur]=$(( 1 - on[cur] )) ;;
+      ''|$'\n'|$'\r')
+        restore_tty
+        for i in "${!ids[@]}"; do
+          (( on[i] )) && CHOSEN+=("${ids[$i]}")
+        done
+        printf '\n' >/dev/tty
+        return 0
+        ;;
+      q|$'\e')
+        restore_tty
+        CHOSEN=()
+        printf '\n' >/dev/tty
+        return 0
+        ;;
+    esac
+    printf '\033[%dA' $((n + 1)) >/dev/tty
+  done
+}
+
+offer_setup() {
+  local -a missing=()
+  local id
+  vault_ready && dropbox_client_ready && dropbox_running || missing+=(vault)
+  chromium_ready || missing+=(chromium)
+  bitwarden_ready || missing+=(bitwarden)
+  dropbox_rest_ready || missing+=(dropbox_rest)
+  (( ${#missing[@]} )) || return 0
+
+  if ! tty_ok; then
+    printf ' %sStill open%s  %s\n\n' "$C_YEL" "$C_OFF" "${missing[*]}"
+    return 0
+  fi
+
+  checkbox_menu "${missing[@]}"
+  (( ${#CHOSEN[@]} )) || return 0
+
+  for id in vault chromium bitwarden dropbox_rest; do
+    local chosen
+    for chosen in "${CHOSEN[@]}"; do
+      if [[ "$chosen" == "$id" ]]; then
+        "do_${id}"
+      fi
+    done
+  done
+}
+
 header
 check_dropbox
+check_browser
+check_bitwarden
 check_projects
 check_secrets
 check_passwords
-check_browser
 check_keybinds
 check_herdr
 check_configs
+offer_setup
 
 printf ' %s%d done%s  %s%d waiting%s  %s%d missing%s\n\n' \
   "$C_GREEN" "$PASS_N" "$C_OFF" \
