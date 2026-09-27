@@ -67,11 +67,6 @@ LOGO=(
   " ╚═════╝  ╚═╝     ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝  ╚═════╝  ╚═╝  ╚═╝    ╚═╝   "
 )
 
-ROOT=""
-if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
-  ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-fi
-
 header() {
   printf '\n'
   local colors i color
@@ -216,14 +211,6 @@ check_bitwarden() {
   printf '\n'
 }
 
-age_days() {
-  local f="$1" now mtime
-  [[ -e "$f" ]] || { echo 9999; return; }
-  now=$(date +%s)
-  mtime=$(stat -c %Y "$f" 2>/dev/null || echo 0)
-  echo $(( (now - mtime) / 86400 ))
-}
-
 check_dropbox() {
   section "Dropbox"
   if dropbox_client_ready && dropbox_running; then
@@ -244,114 +231,6 @@ check_dropbox() {
     row pass "Rest of Dropbox" "Notes, Resources, Documents, Images, Personal"
   else
     row fail "Rest of Dropbox" "working folders are not all here"
-  fi
-  printf '\n'
-}
-
-check_projects() {
-  section "Projects"
-  local dir name git_n=0 other_n=0
-  if [[ ! -d "$HOME/Projects" ]]; then
-    row fail "Projects directory" "missing ~/Projects"
-    row warn "GitHub login" "waiting on Projects"
-    printf '\n'
-    return
-  fi
-
-  shopt -s nullglob
-  for dir in "$HOME/Projects"/*/; do
-    name=$(basename "$dir")
-    [[ "$name" == .* ]] && continue
-    if [[ -d "$dir/.git" ]]; then
-      git_n=$((git_n + 1))
-    else
-      other_n=$((other_n + 1))
-    fi
-  done
-  shopt -u nullglob
-
-  if (( git_n > 0 && other_n == 0 )); then
-    row pass "Repositories" "$git_n git repos"
-  elif (( git_n > 0 )); then
-    row warn "Repositories" "$git_n git, $other_n not git"
-  else
-    row fail "Repositories" "none cloned yet"
-  fi
-
-  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-    row pass "GitHub login" "gh can clone private repos"
-  else
-    row fail "GitHub login" "run gh auth login on this machine"
-  fi
-  printf '\n'
-}
-
-check_secrets() {
-  section "Secrets"
-  local env_root="$HOME/Dropbox/Vault/LaravelEnvs"
-  local newest="" edays=9999
-  local dir name need=0 have=0
-  local -a missing=()
-
-  if [[ -d "$env_root" ]]; then
-    newest=$(find "$env_root" -mindepth 1 -maxdepth 1 -type d -name 'envs_*' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
-  fi
-  if [[ -n "$newest" ]]; then
-    edays=$(age_days "$newest")
-    if (( edays <= 30 )); then
-      row pass "Env backup in Vault" "$(basename "$newest") · ${edays}d ago"
-    else
-      row warn "Env backup in Vault" "$(basename "$newest") · ${edays}d ago"
-    fi
-  elif [[ -d "$HOME/Dropbox/Vault" ]]; then
-    row fail "Env backup in Vault" "no envs_* snapshot"
-  else
-    row fail "Env backup in Vault" "Vault is not on this machine"
-  fi
-
-  if [[ -d "$HOME/Projects" ]]; then
-    shopt -s nullglob
-    for dir in "$HOME/Projects"/*/; do
-      [[ -f "$dir/.env.example" || -f "$dir/artisan" ]] || continue
-      name=$(basename "$dir")
-      if [[ -f "$dir/.env" ]]; then
-        have=$((have + 1))
-      else
-        need=$((need + 1))
-        if (( ${#missing[@]} < 4 )); then
-          missing+=("$name")
-        fi
-      fi
-    done
-    shopt -u nullglob
-  fi
-
-  if (( need == 0 && have > 0 )); then
-    row pass "Repo .env files" "$have present, none missing"
-  elif (( need > 0 && have > 0 )); then
-    row warn "Repo .env files" "$have present, $need missing (${missing[*]})"
-  elif (( need > 0 )); then
-    row fail "Repo .env files" "$need missing (${missing[*]})"
-  else
-    row warn "Repo .env files" "no Laravel apps cloned yet"
-  fi
-  printf '\n'
-}
-
-check_passwords() {
-  section "Passwords"
-  local vault="$HOME/Dropbox/Vault/main.kdbx"
-
-  if [[ -f "$vault" ]]; then
-    row pass "KeePass vault" "in Dropbox"
-  else
-    row fail "KeePass vault" "not in ~/Dropbox/Vault"
-  fi
-
-  if timeout 2 secret-tool lookup keepass keepassxc >/dev/null 2>&1; then
-    row pass "KeePass auto-unlock" "keyring has the password"
-  else
-    row warn "KeePass auto-unlock" "keyring entry missing on this login"
   fi
   printf '\n'
 }
@@ -446,75 +325,6 @@ EOF
   else
     row warn "uBlock Origin Lite" "policy is set; restart Chromium to install it"
   fi
-}
-
-check_keybinds() {
-  section "Keybinds"
-  local bindings="$HOME/.config/hypr/bindings.conf"
-  local hypr="$HOME/.config/hypr/hyprland.conf"
-  local custom=0
-
-  if [[ -f "$bindings" ]]; then
-    row pass "Omarchy bindings" "defaults are on disk"
-  else
-    row fail "Omarchy bindings" "bindings.conf missing"
-  fi
-
-  if [[ -f "$bindings" ]] && grep -q '1password' "$bindings" 2>/dev/null; then
-    custom=1
-  fi
-  if [[ -f "$hypr" ]] && grep -q 'special:scratchpad' "$hypr" 2>/dev/null; then
-    custom=1
-  fi
-  if (( custom )); then
-    row pass "Custom keybinds" "scratchpad or 1Password is bound"
-  else
-    row warn "Custom keybinds" "still Omarchy defaults"
-  fi
-  printf '\n'
-}
-
-check_herdr() {
-  section "herdr"
-  if command -v herdr >/dev/null 2>&1; then
-    row pass "herdr binary" "on PATH"
-  else
-    row fail "herdr binary" "not installed"
-  fi
-  if [[ -f "$HOME/.config/herdr/config.toml" ]]; then
-    row pass "herdr config" "local config.toml present"
-  else
-    row warn "herdr config" "no local config yet"
-  fi
-  printf '\n'
-}
-
-check_configs() {
-  section "Configs"
-  if [[ -f "$HOME/.config/hypr/hyprland.conf" && -f "$HOME/.config/waybar/config.jsonc" ]]; then
-    row pass "Omarchy defaults" "hypr and waybar are on disk"
-  else
-    row fail "Omarchy defaults" "hypr or waybar config missing"
-  fi
-
-  if [[ -d "$HOME/.config/omarchy/themes/polaroid" && ! -L "$HOME/.config/omarchy/themes/polaroid" ]]; then
-    row pass "Polaroid theme" "custom theme is on this machine"
-  else
-    row warn "Polaroid theme" "not brought over; stock theme stays"
-  fi
-
-  if compgen -G "$HOME/.config/waybar/scripts/let-num*" >/dev/null; then
-    row pass "Waybar scripts" "let-num scripts present"
-  else
-    row warn "Waybar scripts" "stock waybar, scripts not copied"
-  fi
-
-  if [[ -n "$ROOT" && -d "$ROOT/config" ]]; then
-    row pass "Repo overlay" "config/ is in the checkout"
-  else
-    row warn "Repo overlay" "public repo tracks no configs yet"
-  fi
-  printf '\n'
 }
 
 do_vault() {
@@ -696,12 +506,12 @@ checkbox_menu() {
 
     key=""
     while [[ -z "$key" ]]; do
-      IFS= read -rsn1 key </dev/tty || true
+      IFS= read -rsn1 -d '' key </dev/tty || true
     done
     if [[ "$key" == $'\e' ]]; then
       local rest a b
-      IFS= read -rsn1 -t 0.05 a </dev/tty || a=""
-      IFS= read -rsn1 -t 0.05 b </dev/tty || b=""
+      IFS= read -rsn1 -d '' -t 0.05 a </dev/tty || a=""
+      IFS= read -rsn1 -d '' -t 0.05 b </dev/tty || b=""
       rest="${a}${b}"
       key+="$rest"
     fi
@@ -710,7 +520,7 @@ checkbox_menu() {
       j|$'\e[B') cur=$(( (cur + 1) % n )) ;;
       k|$'\e[A') cur=$(( (cur + n - 1) % n )) ;;
       ' ') on[cur]=$(( 1 - on[cur] )) ;;
-      ''|$'\n'|$'\r')
+      $'\n'|$'\r')
         restore_tty
         for i in "${!ids[@]}"; do
           (( on[i] )) && CHOSEN+=("${ids[$i]}")
@@ -760,12 +570,6 @@ header
 check_dropbox
 check_browser
 check_bitwarden
-check_projects
-check_secrets
-check_passwords
-check_keybinds
-check_herdr
-check_configs
 offer_setup
 
 printf ' %s%d done%s  %s%d waiting%s  %s%d missing%s\n\n' \
@@ -780,10 +584,8 @@ if (( FAIL_N == 0 && WARN_N == 0 )); then
     "${C_BOLD}Same desk. New machine.${C_OFF}"
 else
   callout "Still setting up" \
-    "Re-run after each thing you finish." \
-    "Waiting items are defaults we have not copied." \
-    "" \
-    "Secrets stay in Vault. This repo stays public." \
+    "Checked rows run when you press enter." \
+    "Re-run after Dropbox or Bitwarden finishes signing in." \
     "" \
     "${C_BOLD}Same desk. New machine.${C_OFF}"
 fi
