@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# Omarchy checklist. Safe to re-run. Changes nothing.
+# Omarchy checklist. Safe to re-run.
+# The only write is the Chromium Bookmarks file, to or from Vault.
 # curl -fsSL https://raw.githubusercontent.com/LukasCaha/omarchy/main/bootstrap.sh | sh
 #
 # Public repo may later track only reviewed overlays:
 #   config/hypr/bindings.conf
 #   config/waybar/scripts/let-num*
 #   config/omarchy/themes/polaroid
-# Never commit: .env, KeePass, SSH keys, Chromium profile, cursor auth,
-# gcloud/origin credentials, Wi-Fi, /etc/hosts, herdr config.toml
+# Never commit: .env, KeePass, SSH keys, Chromium profile, bookmarks,
+# cursor auth, gcloud/origin credentials, Wi-Fi, /etc/hosts, herdr config.toml
 # (it can hold SSH targets). Those stay in Dropbox/Vault or the keyring.
+# Bookmarks are copied as a file to ~/Dropbox/Vault/browser/chromium/Bookmarks.
+# This script never prints their URLs.
 set -uo pipefail
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
@@ -72,7 +75,7 @@ header() {
     fi
   done
   printf '\n'
-  printf ' %s INFO %s Checklist only. Re-run it as often as you want. Nothing is changed.\n\n' "${C_INFO}${C_BOLD}" "$C_OFF"
+  printf ' %s INFO %s Re-run anytime. Bookmarks move only as a file through Vault.\n\n' "${C_INFO}${C_BOLD}" "$C_OFF"
 }
 
 section() {
@@ -266,9 +269,8 @@ check_secrets() {
 }
 
 check_passwords() {
-  section "Passwords and browser"
+  section "Passwords"
   local vault="$HOME/Dropbox/Vault/main.kdbx"
-  local bookmarks="$HOME/.config/chromium/Default/Bookmarks"
 
   if [[ -f "$vault" ]]; then
     row pass "KeePass vault" "in Dropbox"
@@ -281,11 +283,75 @@ check_passwords() {
   else
     row warn "KeePass auto-unlock" "keyring entry missing on this login"
   fi
+  printf '\n'
+}
 
-  if [[ -f "$bookmarks" ]]; then
-    row pass "Chromium bookmarks" "profile is on this machine"
+bookmark_urls() {
+  local f="$1"
+  [[ -f "$f" ]] || { echo 0; return; }
+  python3 - "$f" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print(0)
+    raise SystemExit
+def count(node):
+    if not isinstance(node, dict):
+        return 0
+    if node.get("type") == "url":
+        return 1
+    return sum(count(child) for child in node.get("children") or [])
+roots = d.get("roots") or {}
+print(sum(count(node) for node in roots.values()))
+PY
+}
+
+check_browser() {
+  section "Browser"
+  local local_file="$HOME/.config/chromium/Default/Bookmarks"
+  local vault_file="$HOME/Dropbox/Vault/browser/chromium/Bookmarks"
+  local local_n=0 vault_n=0
+
+  if command -v chromium >/dev/null 2>&1; then
+    row pass "Chromium" "installed"
   else
-    row fail "Chromium bookmarks" "sign in or copy the profile"
+    row fail "Chromium" "not installed"
+    printf '\n'
+    return
+  fi
+
+  if [[ ! -d "$HOME/Dropbox/Vault" ]]; then
+    row fail "Bookmark copy" "Vault is not on this machine"
+    printf '\n'
+    return
+  fi
+
+  local_n=$(bookmark_urls "$local_file")
+  vault_n=$(bookmark_urls "$vault_file")
+
+  if (( local_n > 0 )); then
+    if [[ ! -f "$vault_file" ]] || [[ "$local_file" -nt "$vault_file" ]]; then
+      mkdir -p "$(dirname "$vault_file")"
+      cp -a "$local_file" "$vault_file"
+      row pass "Bookmark copy" "$local_n urls saved in Vault"
+    else
+      row pass "Bookmark copy" "$local_n urls in the profile, Vault is current"
+    fi
+    printf '\n'
+    return
+  fi
+
+  if (( vault_n > 0 )); then
+    if pgrep -x chromium >/dev/null 2>&1; then
+      row warn "Bookmark copy" "quit Chromium, then re-run to restore $vault_n urls"
+    else
+      mkdir -p "$(dirname "$local_file")"
+      cp -a "$vault_file" "$local_file"
+      row pass "Bookmark copy" "$vault_n urls restored from Vault"
+    fi
+  else
+    row fail "Bookmark copy" "no bookmarks in the profile or in Vault"
   fi
   printf '\n'
 }
@@ -364,6 +430,7 @@ check_dropbox
 check_projects
 check_secrets
 check_passwords
+check_browser
 check_keybinds
 check_herdr
 check_configs
