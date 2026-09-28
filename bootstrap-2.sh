@@ -383,17 +383,12 @@ CREATE INDEX IF NOT EXISTS favicon_bitmaps_icon_id ON favicon_bitmaps(icon_id);
 db.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('version', '9')")
 db.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('last_compatible_version', '9')")
 db.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('mmap_status', '-1')")
-have = {row[0] for row in db.execute("SELECT page_url FROM icon_mapping")}
-pending = [url for url in pages if url not in have]
-if not pending:
-    print("bookmark favicons already cached")
-    raise SystemExit(0)
 
 def chrome_now():
     return int((time.time() + 11644473600) * 1_000_000)
 
 def looks_like_image(blob):
-    if not blob or len(blob) < 8 or len(blob) > 300_000:
+    if not blob or len(blob) < 8 or len(blob) > 500_000:
         return False
     return (
         blob.startswith(b"\x89PNG\r\n\x1a\n")
@@ -403,101 +398,185 @@ def looks_like_image(blob):
         or (blob.startswith(b"RIFF") and blob[8:12] == b"WEBP")
     )
 
+def looks_like_svg(blob):
+    head = blob[:300].lstrip().lower()
+    return b"<svg" in head or head.startswith(b"<?xml")
+
 def image_size(blob):
     if blob.startswith(b"\x89PNG\r\n\x1a\n") and len(blob) >= 24:
         width, height = struct.unpack(">II", blob[16:24])
         return int(width), int(height)
     return 0, 0
 
+def svg_to_png(blob):
+    import shutil, subprocess
+    tool = shutil.which("rsvg-convert")
+    if tool:
+        proc = subprocess.run(
+            [tool, "-w", "32", "-h", "32", "-f", "png"],
+            input=blob, capture_output=True,
+        )
+        if proc.returncode == 0 and looks_like_image(proc.stdout):
+            return proc.stdout
+    tool = shutil.which("magick") or shutil.which("convert")
+    if not tool:
+        return None
+    proc = subprocess.run(
+        [tool, "-background", "none", "-resize", "32x32", "svg:-", "png:-"],
+        input=blob, capture_output=True,
+    )
+    if proc.returncode == 0 and looks_like_image(proc.stdout):
+        return proc.stdout
+    return None
+
 def fetch(url):
-    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(request, timeout=8) as response:
-        return response.read(300_000), response.geturl()
+    request = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "text/html,image/png,image/x-icon,image/svg+xml,*/*;q=0.8",
+    })
+    with urllib.request.urlopen(request, timeout=12) as response:
+        return response.read(400_000), response.geturl()
+
+def attr(tag, name):
+    match = re.search(rf"\b{name}\s*=\s*('([^']*)'|\"([^\"]*)\"|([^\s>]+))", tag, re.I)
+    if not match:
+        return ""
+    return next(group for group in match.groups()[1:] if group is not None)
+
+def color_scheme(media):
+    text = (media or "").lower().replace(" ", "")
+    if "prefers-color-scheme:dark" in text:
+        return "dark"
+    if "prefers-color-scheme:light" in text:
+        return "light"
+    return "default"
+
+def size_rank(sizes):
+    best = 80
+    for part in (sizes or "").lower().replace(" ", "").split(","):
+        if part in ("", "any"):
+            best = min(best, 12)
+            continue
+        match = re.match(r"(\d+)x(\d+)", part)
+        if not match:
+            continue
+        edge = max(int(match.group(1)), int(match.group(2)))
+        best = min(best, abs(edge - 32))
+    return best
 
 def icon_for(page_url):
     parts = urllib.parse.urlsplit(page_url)
     origin = f"{parts.scheme}://{parts.netloc}"
-    host = parts.hostname or ""
-    candidates = [origin + "/favicon.ico"]
-    if host:
-        candidates.append(f"https://icons.duckduckgo.com/ip3/{host}.ico")
-    for candidate in candidates:
-        try:
-            blob, final = fetch(candidate)
-        except Exception:
-            continue
-        if looks_like_image(blob):
-            return final, blob
+    candidates = []
+    final_page = page_url
     try:
-        html, final = fetch(page_url)
-        text = html[:80_000].decode("utf-8", "ignore")
+        html, final_page = fetch(page_url)
+        text = html[:200_000].decode("utf-8", "ignore")
+        for tag in re.findall(r"<link\b[^>]*>", text, re.I):
+            rel = attr(tag, "rel").lower()
+            if "icon" not in rel or "mask-icon" in rel:
+                continue
+            href = attr(tag, "href")
+            if not href:
+                continue
+            kind = "apple" if "apple-touch" in rel else "icon"
+            candidates.append({
+                "url": urllib.parse.urljoin(final_page, href),
+                "scheme": color_scheme(attr(tag, "media")),
+                "kind": kind,
+                "size": size_rank(attr(tag, "sizes")),
+                "type": attr(tag, "type").lower(),
+            })
     except Exception:
-        return None
-    for tag in re.findall(r"<link\b[^>]*>", text, re.I):
-        if not re.search(r"rel=['\"][^'\"]*icon", tag, re.I):
-            continue
-        match = re.search(r"href=['\"]([^'\"]+)", tag, re.I)
-        if not match:
-            continue
-        icon_url = urllib.parse.urljoin(final, match.group(1))
-        try:
-            blob, final_icon = fetch(icon_url)
-        except Exception:
-            continue
+        pass
+    if any(item["scheme"] != "dark" for item in candidates):
+        candidates = [item for item in candidates if item["scheme"] != "dark"]
+    scheme_rank = {"default": 0, "light": 1, "dark": 2}
+    def sort_key(item):
+        svg = "svg" in item["type"] or item["url"].lower().split("?")[0].endswith(".svg")
+        return (
+            scheme_rank[item["scheme"]],
+            0 if item["kind"] == "icon" else 1,
+            1 if svg else 0,
+            item["size"],
+        )
+    candidates.sort(key=sort_key)
+    ordered = []
+    seen_urls = set()
+    for item in candidates:
+        if item["url"] not in seen_urls:
+            seen_urls.add(item["url"])
+            ordered.append(item["url"])
+    ordered.append(origin + "/favicon.ico")
+    for icon_url in ordered:
+        if icon_url.startswith("data:"):
+            import base64
+            header, _, payload = icon_url.partition(",")
+            if ";base64" not in header:
+                continue
+            try:
+                blob, final_icon = base64.b64decode(payload), icon_url[:80]
+            except Exception:
+                continue
+        else:
+            try:
+                blob, final_icon = fetch(icon_url)
+            except Exception:
+                continue
+        if looks_like_svg(blob):
+            blob = svg_to_png(blob)
+            if not blob:
+                continue
+            final_icon = icon_url + "#png"
         if looks_like_image(blob):
             return final_icon, blob
     return None
 
-by_origin = {}
-for page in pending:
-    parts = urllib.parse.urlsplit(page)
-    by_origin.setdefault(f"{parts.scheme}://{parts.netloc}", []).append(page)
-
 found = {}
-with ThreadPoolExecutor(max_workers=8) as pool:
-    futures = {pool.submit(icon_for, pages[0]): origin for origin, pages in by_origin.items()}
+missed = 0
+with ThreadPoolExecutor(max_workers=6) as pool:
+    futures = {pool.submit(icon_for, page): page for page in pages}
     for future in as_completed(futures):
-        origin = futures[future]
+        page = futures[future]
         try:
             result = future.result()
         except Exception:
             result = None
         if result:
-            found[origin] = result
+            found[page] = result
+        else:
+            missed += 1
 
 now = chrome_now()
 stored = 0
 icon_ids = {}
-for origin, page_list in by_origin.items():
-    got = found.get(origin)
-    if not got:
-        continue
-    icon_url, blob = got
+for page, (icon_url, blob) in found.items():
+    db.execute("DELETE FROM icon_mapping WHERE page_url = ?", (page,))
     icon_id = icon_ids.get(icon_url)
     if icon_id is None:
         row = db.execute("SELECT id FROM favicons WHERE url = ?", (icon_url,)).fetchone()
         if row:
             icon_id = row[0]
+            db.execute("DELETE FROM favicon_bitmaps WHERE icon_id = ?", (icon_id,))
         else:
             cur = db.execute(
                 "INSERT INTO favicons(url, icon_type) VALUES (?, 1)",
                 (icon_url,),
             )
             icon_id = cur.lastrowid
-            width, height = image_size(blob)
-            db.execute(
-                "INSERT INTO favicon_bitmaps(icon_id, last_updated, image_data, width, height, last_requested) VALUES (?, ?, ?, ?, ?, ?)",
-                (icon_id, now, blob, width, height, now),
-            )
-        icon_ids[icon_url] = icon_id
-    for page in page_list:
+        width, height = image_size(blob)
         db.execute(
-            "INSERT INTO icon_mapping(page_url, icon_id, page_url_type) VALUES (?, ?, 0)",
-            (page, icon_id),
+            "INSERT INTO favicon_bitmaps(icon_id, last_updated, image_data, width, height, last_requested) VALUES (?, ?, ?, ?, ?, ?)",
+            (icon_id, now, blob, width, height, now),
         )
-        stored += 1
+        icon_ids[icon_url] = icon_id
+    db.execute(
+        "INSERT INTO icon_mapping(page_url, icon_id, page_url_type) VALUES (?, ?, 0)",
+        (page, icon_id),
+    )
+    stored += 1
 db.commit()
-print(f"cached {stored} bookmark favicons")
+print(f"cached {stored} bookmark favicons, {missed} still missing")
 PY
 }
 
