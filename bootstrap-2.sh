@@ -39,6 +39,28 @@ dropbox_running() {
 
 dropbox_linked() { [[ -f "$HOME/.dropbox/info.json" ]]; }
 
+archive_excluded() {
+  dropbox-cli exclude list 2>/dev/null | grep -q 'Dropbox/Archive'
+}
+
+exclude_dropbox_archive() {
+  if archive_excluded; then
+    say "Dropbox/Archive stays online only"
+    return 0
+  fi
+  say "Keeping ~/Dropbox/Archive online only. The cloud copy stays. This PC will not keep the files."
+  local _
+  for _ in $(seq 1 90); do
+    if [[ -d "$HOME/Dropbox/Archive" ]]; then
+      dropbox-cli exclude add "$HOME/Dropbox/Archive"
+      say "Dropbox/Archive is excluded"
+      return 0
+    fi
+    sleep 2
+  done
+  say "Archive has not appeared yet. When it does: dropbox exclude add ~/Dropbox/Archive"
+}
+
 bitwarden_app_logged_in() {
   local f="$HOME/.config/Bitwarden/data.json"
   [[ -f "$f" ]] || return 1
@@ -1006,6 +1028,7 @@ else
   done
   say "Dropbox is signed in"
 fi
+exclude_dropbox_archive
 say "Waiting for Vault bookmarks."
 until [[ -f "$VAULT_BOOKMARKS" ]]; do
   sleep 2
