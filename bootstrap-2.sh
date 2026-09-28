@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 # Barebones setup for Omarchy 4.0.4. Safe to re-run.
-# 1. Dropbox service          omarchy-install-service-dropbox
-# 2. Bitwarden service        omarchy-pkg-add bitwarden bitwarden-cli
-# 3. Chromium: uBlock Origin Lite, Bitwarden extension, bookmarks, vertical tabs
-# 4. Open Bitwarden sign-in (app and extension)
-# 5. Open Dropbox sign-in
-#
-# Chromium cannot install classic uBlock Origin. The policy installs
-# uBlock Origin Lite. On 4.0.4 the policy file has to be root-owned or
-# the next theme refresh deletes it.
+# 0. Czech QWERTZ, before any password
+# 1. Dropbox service, then its own sign-in (the tray, not dropbox.com)
+# 2. Bitwarden desktop, one sign-in, then the PC login unlocks it
+# 3. Chromium bookmarks, vertical tabs, uBlock Origin Lite, Bitwarden extension
 set -euo pipefail
 
 UBLOCK_ID="ddkjiahejlhfcafbddmgiahcphecmpfh"
@@ -19,7 +14,9 @@ POLICY_FILE="$POLICY_DIR/extensions.json"
 PREFS="$HOME/.config/chromium/Default/Preferences"
 BOOKMARKS="$HOME/.config/chromium/Default/Bookmarks"
 VAULT_BOOKMARKS="$HOME/Dropbox/Vault/browser/chromium/Bookmarks"
-BW_EXT_URL="chrome-extension://${BITWARDEN_EXT_ID}/popup/index.html"
+INPUT_LUA="$HOME/.config/hypr/input.lua"
+POLKIT_RULE="/etc/polkit-1/rules.d/49-bitwarden-session.rules"
+POLKIT_POLICY="/usr/share/polkit-1/actions/com.bitwarden.Bitwarden.policy"
 
 say() { printf '%s\n' "$*"; }
 
@@ -29,10 +26,6 @@ pkg_present() {
   else
     pacman -Q "$@" &>/dev/null
   fi
-}
-
-launch() {
-  setsid uwsm-app -- "$@" >/dev/null 2>&1 &
 }
 
 chromium_running() { pgrep -x chromium >/dev/null 2>&1; }
@@ -48,13 +41,17 @@ bitwarden_app_logged_in() {
   [[ -f "$f" ]] && grep -q '"userId"' "$f"
 }
 
-bitwarden_ext_logged_in() {
-  local dir="$HOME/.config/chromium/Default/Local Extension Settings/${BITWARDEN_EXT_ID}"
-  [[ -d "$dir" ]] && grep -a -q 'emailVerified' "$dir"/* 2>/dev/null
-}
-
-extension_installed() {
-  [[ -f "$PREFS" ]] && grep -q "$1" "$PREFS"
+close_chromium() {
+  chromium_running || return 0
+  say "Closing Chromium so the profile can be written."
+  killall chromium 2>/dev/null || true
+  local _
+  for _ in $(seq 1 30); do
+    chromium_running || return 0
+    sleep 0.5
+  done
+  say "Chromium is still running. Quit it, then re-run."
+  exit 1
 }
 
 bookmark_count() {
@@ -75,6 +72,104 @@ def count(node):
 roots = data.get("roots") or {}
 print(sum(count(node) for node in roots.values()))
 PY
+}
+
+# Czech QWERTZ. Applied now, and saved for the next login.
+# Omarchy 4 reads ~/.config/hypr/input.lua after its defaults.
+set_keyboard() {
+  say "0. Keyboard"
+  hyprctl keyword input:kb_layout cz >/dev/null
+  hyprctl keyword input:kb_variant '' >/dev/null
+  hyprctl keyword input:kb_options 'compose:caps,shift:both_capslock_cancel' >/dev/null
+  mkdir -p "$(dirname "$INPUT_LUA")"
+  if [[ ! -f "$INPUT_LUA" ]] || ! grep -q 'kb_layout = "cz"' "$INPUT_LUA"; then
+    cat >>"$INPUT_LUA" <<'EOF'
+
+-- Czech QWERTZ. Written by bootstrap-2.sh.
+hl.config({
+  input = {
+    kb_layout = "cz",
+    kb_variant = "",
+    kb_options = "compose:caps,shift:both_capslock_cancel",
+  },
+})
+EOF
+  fi
+  if [[ -f /etc/vconsole.conf ]] && grep -q '^KEYMAP=cz$' /etc/vconsole.conf && grep -q '^XKBLAYOUT=cz$' /etc/vconsole.conf; then
+    :
+  else
+    local tmp rest
+    tmp=$(mktemp)
+    rest=$(grep -v -E '^(KEYMAP|XKBLAYOUT)=' /etc/vconsole.conf 2>/dev/null || true)
+    printf '%s\nKEYMAP=cz\nXKBLAYOUT=cz\n' "$rest" >"$tmp"
+    sudo install -m 0644 -o root -g root -T "$tmp" /etc/vconsole.conf
+    rm -f "$tmp"
+  fi
+  if [[ -f "$HOME/.config/fcitx5/profile" ]]; then
+    sed -i \
+      -e 's/^Default Layout=.*/Default Layout=cz/' \
+      -e 's/^DefaultIM=.*/DefaultIM=keyboard-cz/' \
+      -e 's/^Name=keyboard-us$/Name=keyboard-cz/' \
+      "$HOME/.config/fcitx5/profile"
+    fcitx5-remote -r >/dev/null 2>&1 || true
+  fi
+  say "Czech QWERTZ is on. Type passwords with that layout."
+}
+
+start_dropbox() {
+  if dropbox_running; then
+    return 0
+  fi
+  if command -v uwsm-app >/dev/null 2>&1; then
+    uwsm-app -- dropbox-cli start
+  else
+    dropbox-cli start
+  fi
+  local _
+  for _ in $(seq 1 20); do
+    dropbox_running && return 0
+    sleep 0.5
+  done
+  say "Dropbox did not stay running."
+  return 1
+}
+
+install_bitwarden_unlock() {
+  # The desktop login stores an unlock key. An active PC session may use it
+  # without asking for the Bitwarden password again. A locked session may not.
+  if [[ ! -f "$POLKIT_POLICY" ]]; then
+    sudo tee "$POLKIT_POLICY" >/dev/null <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<policyconfig>
+  <action id="com.bitwarden.Bitwarden.unlock">
+    <description>Unlock Bitwarden</description>
+    <message>Authenticate to unlock Bitwarden</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+</policyconfig>
+EOF
+    sudo chown root:root "$POLKIT_POLICY"
+  fi
+  sudo tee "$POLKIT_RULE" >/dev/null <<'EOF'
+polkit.addRule(function(action, subject) {
+  if (action.id == "com.bitwarden.Bitwarden.unlock" && subject.active) {
+    return polkit.Result.YES;
+  }
+});
+EOF
+  sudo chown root:root "$POLKIT_RULE"
+  local desktop="/usr/share/applications/bitwarden.desktop"
+  if [[ -f "$desktop" ]]; then
+    mkdir -p "$HOME/.config/autostart"
+    cp -a "$desktop" "$HOME/.config/autostart/bitwarden.desktop"
+  fi
 }
 
 write_extension_policy() {
@@ -99,34 +194,29 @@ EOF
 }
 
 enable_vertical_tabs() {
-  if chromium_running; then
-    say "Chromium is open. Quit it and re-run to turn on vertical tabs."
-    return
-  fi
   python3 - "$PREFS" <<'PY'
 import json, os, sys
 path = sys.argv[1]
 os.makedirs(os.path.dirname(path), exist_ok=True)
 data = {}
-if os.path.exists(path):
+if os.path.exists(path) and os.path.getsize(path) > 0:
     try:
         data = json.load(open(path))
     except Exception:
         data = {}
 tabs = data.get("vertical_tabs") if isinstance(data.get("vertical_tabs"), dict) else {}
 tabs["enabled"] = True
+tabs["enabled_first_time"] = True
 data["vertical_tabs"] = tabs
-with open(path, "w") as fh:
+tmp = path + ".bootstrap"
+with open(tmp, "w") as fh:
     json.dump(data, fh)
+os.replace(tmp, path)
 PY
   say "vertical tabs on"
 }
 
 restore_bookmarks() {
-  if [[ ! -f "$VAULT_BOOKMARKS" ]]; then
-    say "no bookmark file in Vault yet"
-    return
-  fi
   local have=0
   if [[ -f "$BOOKMARKS" ]]; then
     have=$(bookmark_count "$BOOKMARKS")
@@ -135,21 +225,35 @@ restore_bookmarks() {
     say "bookmarks already in the profile ($have)"
     return
   fi
-  if chromium_running; then
-    say "Chromium is open. Quit it and re-run to restore bookmarks."
-    return
-  fi
   mkdir -p "$(dirname "$BOOKMARKS")"
   cp -a "$VAULT_BOOKMARKS" "$BOOKMARKS"
-  say "bookmarks restored from Vault"
+  say "bookmarks restored from Vault ($(bookmark_count "$BOOKMARKS"))"
 }
+
+wait_for_chromium_profile() {
+  local _
+  if [[ -f "$PREFS" ]]; then
+    return 0
+  fi
+  say "Opening Chromium once so it creates its profile."
+  if command -v uwsm-app >/dev/null 2>&1; then
+    uwsm-app -- chromium --no-first-run about:blank >/dev/null 2>&1 &
+  else
+    chromium --no-first-run about:blank >/dev/null 2>&1 &
+  fi
+  for _ in $(seq 1 40); do
+    [[ -f "$PREFS" ]] && break
+    sleep 0.5
+  done
+  close_chromium
+  [[ -f "$PREFS" ]]
+}
+
+set_keyboard
 
 say "1. Dropbox"
 if pkg_present dropbox; then
   say "Dropbox already installed"
-  if ! dropbox_running; then
-    launch dropbox-cli start
-  fi
 else
   if ! command -v omarchy-install-service-dropbox >/dev/null 2>&1; then
     say "omarchy-install-service-dropbox is not on PATH. This script targets Omarchy 4.0.4."
@@ -157,12 +261,45 @@ else
   fi
   omarchy-install-service-dropbox
 fi
+start_dropbox
+if dropbox_linked; then
+  say "Dropbox already signed in"
+else
+  say "Sign in from the Dropbox icon in the top-right tray."
+  say "The dropbox.com website does not connect this computer. Wait until ~/Dropbox appears."
+  until dropbox_linked; do
+    sleep 2
+  done
+  say "Dropbox is signed in"
+fi
+say "Waiting for Vault bookmarks."
+until [[ -f "$VAULT_BOOKMARKS" ]]; do
+  sleep 2
+done
+say "Vault bookmarks are here"
 
 say "2. Bitwarden"
 if pkg_present bitwarden bitwarden-cli; then
   say "Bitwarden already installed"
 else
   omarchy-pkg-add bitwarden bitwarden-cli
+fi
+install_bitwarden_unlock
+if bitwarden_app_logged_in; then
+  say "Bitwarden already signed in"
+else
+  if command -v uwsm-app >/dev/null 2>&1; then
+    uwsm-app -- gtk-launch bitwarden >/dev/null 2>&1 &
+  else
+    gtk-launch bitwarden >/dev/null 2>&1 &
+  fi
+  say "Sign in once in the Bitwarden window. Do not sign in again in Chromium."
+  say "In that same window: Settings, Unlock with system authentication."
+  say "This PC session is allowed to use that unlock, so it will not ask for the Bitwarden password again."
+  until bitwarden_app_logged_in; do
+    sleep 2
+  done
+  say "Bitwarden is signed in"
 fi
 
 say "3. Chromium"
@@ -172,37 +309,15 @@ else
   omarchy-pkg-add chromium
 fi
 write_extension_policy
-if extension_installed "$UBLOCK_ID"; then
-  say "uBlock Origin Lite installed"
-else
-  say "uBlock Origin Lite installs the next time Chromium starts"
-fi
-if extension_installed "$BITWARDEN_EXT_ID"; then
-  say "Bitwarden extension installed"
-else
-  say "Bitwarden extension installs the next time Chromium starts"
-fi
-restore_bookmarks
+wait_for_chromium_profile || true
+close_chromium
 enable_vertical_tabs
-
-say "4. Bitwarden sign-in"
-if bitwarden_app_logged_in; then
-  say "Bitwarden app already signed in"
+restore_bookmarks
+if command -v uwsm-app >/dev/null 2>&1; then
+  uwsm-app -- chromium >/dev/null 2>&1 &
 else
-  launch gtk-launch bitwarden
-  say "opened the Bitwarden app"
+  chromium >/dev/null 2>&1 &
 fi
-if bitwarden_ext_logged_in; then
-  say "Bitwarden extension already signed in"
-else
-  launch chromium "$BW_EXT_URL"
-  say "opened the Bitwarden extension. Sign in there too. The app login does not fill the extension."
-fi
-
-say "5. Dropbox sign-in"
-if dropbox_linked; then
-  say "Dropbox already signed in"
-else
-  launch xdg-open "https://www.dropbox.com/login"
-  say "opened the Dropbox sign-in page"
-fi
+say "Chromium is open with vertical tabs and bookmarks."
+say "uBlock Origin Lite and the Bitwarden extension install from the policy."
+say "The extension uses the Bitwarden app. Open it from the toolbar and choose Unlock with system authentication. It should not ask for the master password."
