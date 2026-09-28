@@ -590,9 +590,21 @@ if not os.path.exists(path):
     raise SystemExit(1)
 data = json.load(open(path))
 data["global_desktopSettings_sshAgentEnabled"] = True
+# Local to this computer. Not part of the synced Bitwarden account.
+# Older builds use the tray keys. Newer builds use runInBackground.
+data["global_desktopSettings_trayEnabled"] = True
+# Vault timeout Never keeps the vault unlocked, so the window can start in the tray.
+data["global_desktopSettings_startToTray"] = True
+data["global_desktopSettings_minimizeToTray"] = True
+data["global_desktopSettings_closeToTray"] = True
+data["global_desktopSettings_openAtLogin"] = True
+data["global_desktopSettings_runInBackground"] = True
 active = data.get("global_account_activeAccountId")
 if isinstance(active, str) and len(active) > 8:
     data[f"{active}_desktopSettings_sshAgentRememberAuthorizations"] = "never"
+    # Ask the system login to unlock the vault when the app starts.
+    # The unlock key itself is created only by the settings checkbox.
+    data[f"{active}_biometricSettings_promptAutomatically"] = True
 tmp = path + ".bootstrap"
 with open(tmp, "w") as fh:
     json.dump(data, fh)
