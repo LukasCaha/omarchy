@@ -593,7 +593,6 @@ data["global_desktopSettings_sshAgentEnabled"] = True
 # Local to this computer. Not part of the synced Bitwarden account.
 # Older builds use the tray keys. Newer builds use runInBackground.
 data["global_desktopSettings_trayEnabled"] = True
-# Vault timeout Never keeps the vault unlocked, so the window can start in the tray.
 data["global_desktopSettings_startToTray"] = True
 data["global_desktopSettings_minimizeToTray"] = True
 data["global_desktopSettings_closeToTray"] = True
@@ -602,8 +601,9 @@ data["global_desktopSettings_runInBackground"] = True
 active = data.get("global_account_activeAccountId")
 if isinstance(active, str) and len(active) > 8:
     data[f"{active}_desktopSettings_sshAgentRememberAuthorizations"] = "never"
-    # Ask the system login to unlock the vault when the app starts.
-    # The unlock key itself is created only by the settings checkbox.
+    data[f"{active}_vaultTimeoutSettings_vaultTimeout"] = "never"
+    data[f"{active}_vaultTimeoutSettings_vaultTimeoutAction"] = "lock"
+    data[f"{active}_biometricSettings_biometricUnlockEnabled"] = True
     data[f"{active}_biometricSettings_promptAutomatically"] = True
 tmp = path + ".bootstrap"
 with open(tmp, "w") as fh:
@@ -632,15 +632,16 @@ install_ssh() {
       install -m "$mode" "$dst" "$src"
     fi
   done
+  # Quit first. A running Bitwarden writes its old settings over data.json on exit.
+  if pgrep -x bitwarden >/dev/null 2>&1; then
+    killall bitwarden 2>/dev/null || true
+    local _
+    for _ in $(seq 1 20); do
+      pgrep -x bitwarden >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+  fi
   if enable_bitwarden_ssh_agent; then
-    if pgrep -x bitwarden >/dev/null 2>&1; then
-      killall bitwarden 2>/dev/null || true
-      local _
-      for _ in $(seq 1 20); do
-        pgrep -x bitwarden >/dev/null 2>&1 || break
-        sleep 0.5
-      done
-    fi
     if command -v uwsm-app >/dev/null 2>&1; then
       uwsm-app -- gtk-launch bitwarden >/dev/null 2>&1 &
     else
@@ -653,7 +654,9 @@ install_ssh() {
     done
   fi
   say "SSH config and public keys are in ~/.ssh."
-  say "Bitwarden serves the private keys on ~/.bitwarden-ssh-agent.sock."
+  say "Bitwarden SSH agent is on, and it will not ask before each connection."
+  say "Vault timeout is Never and the timeout action is Lock, with unlock by system authentication."
+  say "The browser extension keeps its own login. Sign in there once, set the same timeout, and turn on Share unlock with Desktop."
   say "Those keys have to be stored in Bitwarden as SSH keys. A secure note is not used."
   if [[ -S "$HOME/.bitwarden-ssh-agent.sock" ]]; then
     say "The Bitwarden SSH agent is listening."
@@ -838,7 +841,13 @@ else
 fi
 say "Chromium is open with vertical tabs and bookmarks."
 say "uBlock Origin Lite and the Bitwarden extension install from the policy."
-say "The extension uses the Bitwarden app. Open it from the toolbar and choose Unlock with system authentication. It should not ask for the master password."
 
 say "5. SSH"
 install_ssh
+
+say ""
+say "Still to do by hand:"
+say "1. In the Bitwarden app: Settings, Unlock with system authentication. The script records the setting. The unlock key is created only when that box is checked."
+say "2. In the Chromium Bitwarden extension: sign in once, to the same EU account."
+say "3. Extension Settings, Account security: Share unlock with Desktop. If that line is missing, Unlock with biometrics."
+say "4. In the extension, Timeout Never and Timeout action Lock, if those controls are still shown and not managed by the desktop app."
