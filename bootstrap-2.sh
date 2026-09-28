@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-# Barebones Omarchy setup. Safe to re-run.
-# 1. Dropbox service
-# 2. Bitwarden desktop + CLI
+# Barebones setup for Omarchy 4.0.4. Safe to re-run.
+# 1. Dropbox service          omarchy-install-service-dropbox
+# 2. Bitwarden service        omarchy-pkg-add bitwarden bitwarden-cli
 # 3. Chromium: uBlock Origin Lite, Bitwarden extension, bookmarks, vertical tabs
 # 4. Open Bitwarden sign-in (app and extension)
 # 5. Open Dropbox sign-in
 #
 # Chromium cannot install classic uBlock Origin. The policy installs
-# uBlock Origin Lite, which is what this machine already runs.
+# uBlock Origin Lite. On 4.0.4 the policy file has to be root-owned or
+# the next theme refresh deletes it.
 set -euo pipefail
 
 UBLOCK_ID="ddkjiahejlhfcafbddmgiahcphecmpfh"
 BITWARDEN_EXT_ID="nngceckbapebfimnlniiiahkandclblb"
 UPDATE_URL="https://clients2.google.com/service/update2/crx"
-POLICY_FILE="/etc/chromium/policies/managed/ublock.json"
+POLICY_DIR="/etc/chromium/policies/managed"
+POLICY_FILE="$POLICY_DIR/extensions.json"
 PREFS="$HOME/.config/chromium/Default/Preferences"
 BOOKMARKS="$HOME/.config/chromium/Default/Bookmarks"
 VAULT_BOOKMARKS="$HOME/Dropbox/Vault/browser/chromium/Bookmarks"
@@ -21,7 +23,17 @@ BW_EXT_URL="chrome-extension://${BITWARDEN_EXT_ID}/popup/index.html"
 
 say() { printf '%s\n' "$*"; }
 
-pkg_installed() { pacman -Q "$1" &>/dev/null; }
+pkg_present() {
+  if command -v omarchy-pkg-present >/dev/null 2>&1; then
+    omarchy-pkg-present "$@"
+  else
+    pacman -Q "$@" &>/dev/null
+  fi
+}
+
+launch() {
+  setsid uwsm-app -- "$@" >/dev/null 2>&1 &
+}
 
 chromium_running() { pgrep -x chromium >/dev/null 2>&1; }
 
@@ -66,9 +78,13 @@ PY
 }
 
 write_extension_policy() {
-  local dir body
-  dir=$(dirname "$POLICY_FILE")
-  body=$(cat <<EOF
+  local tmp
+  if [[ -f "$POLICY_FILE" ]] && grep -q "$UBLOCK_ID" "$POLICY_FILE" && grep -q "$BITWARDEN_EXT_ID" "$POLICY_FILE"; then
+    say "extension policy already set"
+    return
+  fi
+  tmp=$(mktemp)
+  cat >"$tmp" <<EOF
 {
   "ExtensionInstallForcelist": [
     "${UBLOCK_ID};${UPDATE_URL}",
@@ -76,16 +92,9 @@ write_extension_policy() {
   ]
 }
 EOF
-)
-  if [[ -f "$POLICY_FILE" ]] && grep -q "$UBLOCK_ID" "$POLICY_FILE" && grep -q "$BITWARDEN_EXT_ID" "$POLICY_FILE"; then
-    say "extension policy already set"
-    return
-  fi
-  if [[ -w "$dir" ]]; then
-    printf '%s\n' "$body" >"$POLICY_FILE"
-  else
-    printf '%s\n' "$body" | sudo tee "$POLICY_FILE" >/dev/null
-  fi
+  sudo install -d -m 0755 -o root -g root "$POLICY_DIR"
+  sudo install -m 0644 -o root -g root -T "$tmp" "$POLICY_FILE"
+  rm -f "$tmp"
   say "extension policy written"
 }
 
@@ -135,29 +144,29 @@ restore_bookmarks() {
   say "bookmarks restored from Vault"
 }
 
-open_url() {
-  setsid xdg-open "$1" >/dev/null 2>&1 &
-}
-
 say "1. Dropbox"
-if ! pkg_installed dropbox; then
-  omarchy-install-dropbox
-else
+if pkg_present dropbox; then
   say "Dropbox already installed"
-  if ! dropbox_running && command -v dropbox-cli >/dev/null 2>&1; then
-    uwsm-app -- dropbox-cli start &>/dev/null &
+  if ! dropbox_running; then
+    launch dropbox-cli start
   fi
+else
+  if ! command -v omarchy-install-service-dropbox >/dev/null 2>&1; then
+    say "omarchy-install-service-dropbox is not on PATH. This script targets Omarchy 4.0.4."
+    exit 1
+  fi
+  omarchy-install-service-dropbox
 fi
 
 say "2. Bitwarden"
-if pkg_installed bitwarden && pkg_installed bitwarden-cli; then
+if pkg_present bitwarden bitwarden-cli; then
   say "Bitwarden already installed"
 else
   omarchy-pkg-add bitwarden bitwarden-cli
 fi
 
 say "3. Chromium"
-if pkg_installed chromium; then
+if pkg_present chromium; then
   say "Chromium already installed"
 else
   omarchy-pkg-add chromium
@@ -180,13 +189,13 @@ say "4. Bitwarden sign-in"
 if bitwarden_app_logged_in; then
   say "Bitwarden app already signed in"
 else
-  setsid gtk-launch bitwarden >/dev/null 2>&1 &
+  launch gtk-launch bitwarden
   say "opened the Bitwarden app"
 fi
 if bitwarden_ext_logged_in; then
   say "Bitwarden extension already signed in"
 else
-  setsid chromium "$BW_EXT_URL" >/dev/null 2>&1 &
+  launch chromium "$BW_EXT_URL"
   say "opened the Bitwarden extension. Sign in there too. The app login does not fill the extension."
 fi
 
@@ -194,6 +203,6 @@ say "5. Dropbox sign-in"
 if dropbox_linked; then
   say "Dropbox already signed in"
 else
-  open_url "https://www.dropbox.com/login"
+  launch xdg-open "https://www.dropbox.com/login"
   say "opened the Dropbox sign-in page"
 fi
