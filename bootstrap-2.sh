@@ -38,7 +38,57 @@ dropbox_linked() { [[ -f "$HOME/.dropbox/info.json" ]]; }
 
 bitwarden_app_logged_in() {
   local f="$HOME/.config/Bitwarden/data.json"
-  [[ -f "$f" ]] && grep -q '"userId"' "$f"
+  [[ -f "$f" ]] || return 1
+  python3 - "$f" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+active = data.get("global_account_activeAccountId")
+if isinstance(active, str) and len(active) > 8:
+    raise SystemExit(0)
+accounts = data.get("global_account_accounts")
+if isinstance(accounts, dict) and accounts:
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+set_bitwarden_eu() {
+  python3 - "$HOME/.config/Bitwarden/data.json" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+data = {}
+if os.path.exists(path) and os.path.getsize(path) > 0:
+    try:
+        data = json.load(open(path))
+    except Exception:
+        data = {}
+active = data.get("global_account_activeAccountId")
+accounts = data.get("global_account_accounts")
+if (isinstance(active, str) and len(active) > 8) or (isinstance(accounts, dict) and accounts):
+    raise SystemExit(0)
+data["global_environment_environment"] = {
+    "region": "EU",
+    "urls": {
+        "base": None,
+        "api": "https://api.bitwarden.eu",
+        "identity": "https://identity.bitwarden.eu",
+        "icons": "https://icons.bitwarden.eu",
+        "notifications": "https://notifications.bitwarden.eu",
+        "events": "https://events.bitwarden.eu",
+        "webVault": "https://vault.bitwarden.eu",
+        "keyConnector": None,
+        "send": "https://vault.bitwarden.eu",
+    },
+}
+tmp = path + ".bootstrap"
+with open(tmp, "w") as fh:
+    json.dump(data, fh)
+os.replace(tmp, path)
+PY
+  if command -v bw >/dev/null 2>&1; then
+    bw config server https://vault.bitwarden.eu >/dev/null 2>&1 || true
+  fi
 }
 
 close_chromium() {
@@ -174,7 +224,7 @@ EOF
 
 write_extension_policy() {
   local tmp
-  if [[ -f "$POLICY_FILE" ]] && grep -q "$UBLOCK_ID" "$POLICY_FILE" && grep -q "$BITWARDEN_EXT_ID" "$POLICY_FILE"; then
+  if [[ -f "$POLICY_FILE" ]] && grep -q "$UBLOCK_ID" "$POLICY_FILE" && grep -q "$BITWARDEN_EXT_ID" "$POLICY_FILE" && grep -q "vault.bitwarden.eu" "$POLICY_FILE"; then
     say "extension policy already set"
     return
   fi
@@ -184,7 +234,22 @@ write_extension_policy() {
   "ExtensionInstallForcelist": [
     "${UBLOCK_ID};${UPDATE_URL}",
     "${BITWARDEN_EXT_ID};${UPDATE_URL}"
-  ]
+  ],
+  "3rdparty": {
+    "extensions": {
+      "${BITWARDEN_EXT_ID}": {
+        "environment": {
+          "base": "https://vault.bitwarden.eu",
+          "api": "https://api.bitwarden.eu",
+          "identity": "https://identity.bitwarden.eu",
+          "icons": "https://icons.bitwarden.eu",
+          "notifications": "https://notifications.bitwarden.eu",
+          "events": "https://events.bitwarden.eu",
+          "webVault": "https://vault.bitwarden.eu"
+        }
+      }
+    }
+  }
 }
 EOF
   sudo install -d -m 0755 -o root -g root "$POLICY_DIR"
@@ -288,16 +353,20 @@ install_bitwarden_unlock
 if bitwarden_app_logged_in; then
   say "Bitwarden already signed in"
 else
+  killall bitwarden 2>/dev/null || true
+  set_bitwarden_eu
   if command -v uwsm-app >/dev/null 2>&1; then
     uwsm-app -- gtk-launch bitwarden >/dev/null 2>&1 &
   else
     gtk-launch bitwarden >/dev/null 2>&1 &
   fi
-  say "Sign in once in the Bitwarden window. Do not sign in again in Chromium."
+  say "Bitwarden is open on the EU server, vault.bitwarden.eu."
+  say "Sign in once in that window. The script continues when the sign-in is saved."
   say "In that same window: Settings, Unlock with system authentication."
   say "This PC session is allowed to use that unlock, so it will not ask for the Bitwarden password again."
   until bitwarden_app_logged_in; do
-    sleep 2
+    printf '  still waiting for the Bitwarden sign-in\n'
+    sleep 5
   done
   say "Bitwarden is signed in"
 fi
