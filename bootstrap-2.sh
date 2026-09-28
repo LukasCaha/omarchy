@@ -245,8 +245,8 @@ PY
   say "Scroll is inverted from the Omarchy default, for the mouse and the touchpad."
 }
 
-install_cpu_temp_bar() {
-  mkdir -p "$HOME/.local/bin"
+install_bar_helpers() {
+  mkdir -p "$HOME/.local/bin" "$HOME/.config/omarchy/bar/modules"
   cat >"$HOME/.local/bin/cpu-temp-bar" <<'EOF'
 #!/usr/bin/env python3
 import glob
@@ -282,7 +282,120 @@ if not cands:
 cands.sort(key=lambda item: (-item[0], -item[1]))
 print(f"\uf2c9 {cands[0][1] / 1000:.0f}°")
 EOF
-  chmod 755 "$HOME/.local/bin/cpu-temp-bar"
+  cat >"$HOME/.local/bin/bar-clock" <<'EOF'
+#!/usr/bin/env python3
+import datetime
+print(datetime.datetime.now().strftime("%A %H:%M:%S"), flush=True)
+EOF
+  cat >"$HOME/.local/bin/bar-battery-pct" <<'EOF'
+#!/usr/bin/env python3
+import glob
+value = None
+for path in sorted(glob.glob("/sys/class/power_supply/BAT*/capacity")):
+    try:
+        value = int(open(path).read().strip())
+    except Exception:
+        continue
+if value is None:
+    raise SystemExit
+print(f"{value}%")
+EOF
+  chmod 755 "$HOME/.local/bin/cpu-temp-bar" "$HOME/.local/bin/bar-clock" "$HOME/.local/bin/bar-battery-pct"
+  cat >"$HOME/.config/omarchy/bar/modules/tray-always.qml" <<'EOF'
+import QtQuick
+import QtQuick.Effects
+import QtQuick.Window
+import Quickshell
+import Quickshell.Services.SystemTray
+
+Item {
+  id: root
+  property var bar
+  property string moduleName
+  property var settings
+
+  function keep(item) {
+    if (!item || item.status === Status.Passive) return false
+    var blob = (String(item.id || "") + " " + String(item.title || "") + " " + String(item.tooltipTitle || "")).toLowerCase()
+    if (blob.indexOf("localsend") !== -1) return false
+    if (blob.indexOf("dropbox") !== -1) return false
+    return true
+  }
+
+  property var trayItems: []
+  implicitWidth: Math.max(1, row.implicitWidth)
+  implicitHeight: bar ? bar.barSize : 26
+
+  Timer {
+    interval: 1000
+    running: true
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: {
+      var values = SystemTray.items ? SystemTray.items.values : []
+      var next = []
+      for (var i = 0; i < values.length; i++) next.push(values[i])
+      root.trayItems = next
+    }
+  }
+
+  Row {
+    id: row
+    anchors.verticalCenter: parent.verticalCenter
+    spacing: 0
+
+    Repeater {
+      model: root.trayItems
+      delegate: Item {
+        id: slot
+        required property var modelData
+        visible: root.keep(modelData)
+        implicitWidth: visible ? 27 : 0
+        implicitHeight: 27
+
+        Image {
+          id: icon
+          readonly property bool symbolic: String(slot.modelData.icon || "").split("?")[0].slice(-9) === "-symbolic"
+          anchors.centerIn: parent
+          width: 12
+          height: 12
+          fillMode: Image.PreserveAspectFit
+          sourceSize.width: Math.round(width * Screen.devicePixelRatio)
+          sourceSize.height: Math.round(height * Screen.devicePixelRatio)
+          source: String(slot.modelData.icon || "")
+          visible: !symbolic
+          layer.enabled: symbolic
+        }
+
+        MultiEffect {
+          anchors.fill: icon
+          source: icon
+          visible: icon.symbolic
+          colorization: 1.0
+          colorizationColor: root.bar ? root.bar.foreground : "white"
+        }
+
+        MouseArea {
+          anchors.fill: parent
+          acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onEntered: if (root.bar) root.bar.showTooltip(slot, slot.modelData.tooltipTitle || slot.modelData.title || "")
+          onExited: if (root.bar) root.bar.hideTooltip(slot)
+          onClicked: function(mouse) {
+            if (mouse.button === Qt.MiddleButton) slot.modelData.secondaryActivate()
+            else if (mouse.button === Qt.RightButton && slot.modelData.onlyMenu) slot.modelData.activate()
+            else slot.modelData.activate()
+          }
+          onWheel: function(wheel) {
+            slot.modelData.scroll(wheel.angleDelta.y, false)
+          }
+        }
+      }
+    }
+  }
+}
+EOF
 }
 
 configure_bar() {
@@ -291,9 +404,9 @@ configure_bar() {
   local src="$defaults"
   [[ -s "$cfg" ]] && src="$cfg"
   mkdir -p "$(dirname "$cfg")"
-  python3 - "$src" "$cfg" "$HOME/.local/bin/cpu-temp-bar" <<'PY'
+  python3 - "$src" "$cfg" "$HOME/.local/bin/bar-clock" "$HOME/.local/bin/cpu-temp-bar" "$HOME/.local/bin/bar-battery-pct" <<'PY'
 import json, sys
-src, dest, exec_path = sys.argv[1:]
+src, dest, clock_exec, temp_exec, battery_exec = sys.argv[1:]
 with open(src) as fh:
     data = json.load(fh)
 data["version"] = 1
@@ -312,139 +425,120 @@ def entries(section):
             out.append(entry)
     return out
 
-def find(section, widget_id):
-    for entry in entries(section):
-        if entry.get("id") == widget_id:
-            return entry
-    return None
+center = []
+clock_placed = False
+indicators_seen = False
+clock = {
+    "id": "clock-live",
+    "type": "command",
+    "exec": clock_exec,
+    "interval": 1,
+    "fontSize": 13,
+}
+for entry in entries("center"):
+    widget_id = entry.get("id")
+    if widget_id == "omarchy.indicators":
+        entry["alwaysShow"] = True
+        indicators_seen = True
+        center.append(entry)
+        continue
+    if widget_id in ("omarchy.clock", "clock-live"):
+        if not clock_placed:
+            center.append(clock)
+            clock_placed = True
+        continue
+    center.append(entry)
+if not indicators_seen:
+    center.insert(0, {"id": "omarchy.indicators", "alwaysShow": True})
+if not clock_placed:
+    center.append(clock)
+layout["center"] = center
+bar["centerAnchor"] = "clock-live"
 
-indicators = find("center", "omarchy.indicators")
-if indicators is None:
-    layout["center"] = [{"id": "omarchy.indicators", "alwaysShow": True}] + entries("center")
-else:
-    indicators["alwaysShow"] = True
-    layout["center"] = entries("center")
-
-clock = find("center", "omarchy.clock")
-if clock is None:
-    layout["center"] = entries("center") + [{"id": "omarchy.clock", "format": "dddd HH:mm:ss"}]
-else:
-    clock["format"] = "dddd HH:mm:ss"
-    layout["center"] = entries("center")
-
-power = find("right", "omarchy.power")
-if power is None:
-    layout["right"] = entries("right") + [{"id": "omarchy.power", "showPercentage": True}]
-else:
-    power["showPercentage"] = True
-    layout["right"] = entries("right")
-
-cpu = {
+temp = {
     "id": "cpu-temp",
     "type": "command",
-    "exec": exec_path,
-    "interval": 2,
+    "exec": temp_exec,
+    "interval": 1,
+    "fontSize": 13,
+    "horizontalMargin": 4,
     "tooltip": "CPU temperature",
+    "onClick": "omarchy-launch-or-focus-tui btop",
 }
-right = [entry for entry in entries("right") if entry.get("id") != "cpu-temp"]
-index = next((i for i, entry in enumerate(right) if entry.get("id") == "omarchy.power"), len(right))
-right.insert(index, cpu)
+battery = {
+    "id": "battery-pct",
+    "type": "command",
+    "exec": battery_exec,
+    "interval": 1,
+    "fontSize": 13,
+    "horizontalMargin": 2,
+    "tooltip": "Battery",
+}
+right = []
+for entry in entries("right"):
+    widget_id = entry.get("id")
+    if widget_id in ("omarchy.tray", "tray-always", "cpu-temp", "battery-pct"):
+        continue
+    if widget_id == "omarchy.power":
+        entry["showPercentage"] = False
+    right.append(entry)
+if not any(entry.get("id") == "omarchy.power" for entry in right):
+    right.append({"id": "omarchy.power", "showPercentage": False})
+right.insert(0, {"id": "tray-always", "type": "qml"})
+power_at = next(i for i, entry in enumerate(right) if entry.get("id") == "omarchy.power")
+right.insert(power_at, temp)
+right.insert(power_at + 2, battery)
 layout["right"] = right
 
 tmp = dest + ".bootstrap"
 with open(tmp, "w") as fh:
     json.dump(data, fh, indent=2)
     fh.write("\n")
-os_replace = __import__("os").replace
-os_replace(tmp, dest)
+os.replace = __import__("os").replace
+os.replace(tmp, dest)
 PY
   if command -v omarchy-shell >/dev/null 2>&1; then
     omarchy-shell shell reloadConfig >/dev/null 2>&1 || omarchy-restart-shell >/dev/null 2>&1 || true
   fi
 }
 
-pin_open_tray_icons() {
-  python3 - "$HOME/.config/omarchy/shell.json" <<'PY'
-import json, os, subprocess, sys
-path = sys.argv[1]
-if not os.path.isfile(path):
-    print(0)
-    raise SystemExit
-
-def busctl(*args):
-    return subprocess.check_output(["busctl", "--user", "--json=short", *args], text=True, stderr=subprocess.DEVNULL)
-
-ids = []
-try:
-    raw = busctl("call", "org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems")
-    items = json.loads(raw).get("data", [[]])[0]
-except Exception:
-    items = []
-for item in items:
-    if not isinstance(item, str) or "/" not in item:
-        continue
-    service, rest = item.split("/", 1)
-    object_path = "/" + rest
-    ids.append(item)
-    tail = object_path.rsplit("/", 1)[-1]
-    if tail:
-        ids.append(tail)
-    try:
-        prop = busctl("get-property", service, object_path, "org.kde.StatusNotifierItem", "Id")
-        value = json.loads(prop).get("data")
-        if isinstance(value, str) and value:
-            ids.append(value)
-    except Exception:
-        pass
-ids = list(dict.fromkeys(ids))
-with open(path) as fh:
-    data = json.load(fh)
-right = data.setdefault("bar", {}).setdefault("layout", {}).setdefault("right", [])
-tray = None
-for entry in right:
-    if isinstance(entry, dict) and entry.get("id") == "omarchy.tray":
-        tray = entry
-        break
-if tray is None:
-    tray = {"id": "omarchy.tray"}
-    right.insert(0, tray)
-pinned = [item for item in tray.get("pinned", []) if isinstance(item, str)]
-for item in ids:
-    if item not in pinned:
-        pinned.append(item)
-tray["pinned"] = pinned
-tmp = path + ".bootstrap"
-with open(tmp, "w") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
-os.replace(tmp, path)
-print(len(ids))
-PY
+set_latte_second_wallpaper() {
+  local theme_dir="${OMARCHY_PATH:-/usr/share/omarchy}/themes/catppuccin-latte/backgrounds"
+  local -a backgrounds=()
+  local bg
+  mapfile -d '' backgrounds < <(
+    find -L "$theme_dir" -maxdepth 1 -type f \
+      \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' \) \
+      -print0 2>/dev/null | sort -z
+  )
+  if (( ${#backgrounds[@]} < 2 )); then
+    say "Catppuccin Latte has no second wallpaper."
+    return 0
+  fi
+  bg="${backgrounds[1]}"
+  omarchy theme bg set "$bg"
+  say "Wallpaper: ${bg##*/}"
 }
 
 set_desktop() {
   say "Theme: Catppuccin Latte"
   omarchy theme set "Catppuccin Latte"
+  set_latte_second_wallpaper
   if ! fc-list : family | grep -Fqi "GeistMono Nerd Font"; then
     omarchy-pkg-add otf-geist-mono-nerd
   fi
   say "Font: Geist Mono"
   omarchy font set "GeistMono Nerd Font"
-  install_cpu_temp_bar
+  install_bar_helpers
   configure_bar
-  local pinned
-  pinned=$(pin_open_tray_icons || echo 0)
-  if command -v omarchy-shell >/dev/null 2>&1; then
-    omarchy-shell shell reloadConfig >/dev/null 2>&1 || true
-  fi
   mkdir -p "$HOME/Dropbox/Screenshots" "$HOME/Dropbox/ScreenRecordings"
   mkdir -p "$HOME/.config/uwsm/env.d"
   cat >"$HOME/.config/uwsm/env.d/capture" <<EOF
 export OMARCHY_SCREENSHOT_DIR="\$HOME/Dropbox/Screenshots"
 export OMARCHY_SCREENRECORD_DIR="\$HOME/Dropbox/ScreenRecordings"
 EOF
-  TRAY_PIN_COUNT="$pinned"
-  say "Bar is transparent. Indicators and the clock seconds are on. Battery shows a percent. CPU temperature sits left of the battery."
+  say "Bar is transparent. Tray icons stay open. The clock and CPU temperature update every second."
+  say "CPU temperature sits left of the battery and opens btop. The battery percent sits to the right of the battery icon."
   say "Screenshots go to ~/Dropbox/Screenshots and recordings to ~/Dropbox/ScreenRecordings after the next login."
   set_nautilus_bookmarks
 }
@@ -1136,6 +1230,3 @@ say "1. In the Bitwarden app: Settings, Unlock with system authentication. The s
 say "2. In the Chromium Bitwarden extension: sign in once, to the same EU account."
 say "3. Extension Settings, Account security: Share unlock with Desktop. If that line is missing, Unlock with biometrics."
 say "4. In the extension, Timeout Never and Timeout action Lock, if those controls are still shown and not managed by the desktop app."
-if [[ "${TRAY_PIN_COUNT:-0}" == 0 ]]; then
-  say "5. On the bar, right-click the < and pin each tray icon. Pinned icons stay on the bar."
-fi
