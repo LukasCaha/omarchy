@@ -114,6 +114,25 @@ Put the SSH private keys into Bitwarden as SSH keys before expecting `ssh` to wo
 - It does not change window rules, keybindings, monitors, or the wallpaper beyond the Catppuccin Latte theme.
 - It does not publish anything in `~/Dropbox/Vault` to this git repository.
 
+## Todo
+
+Not in the script yet. Packages can be installed by the script. Repos, `.env` files, and app databases with passwords stay off this public repository and have to be copied by hand.
+
+- **Projects.** `~/Projects` is the big one. The Youklid repos live only on this disk. The new machine needs those clones, including anything not pushed.
+- **Laravel `.env` files.** They sit inside the project directories (about 17 of them), and `~/Spaces` only symlinks those directories. Copying the repos without the `.env` files leaves the apps unable to boot. Do not commit them here.
+- **Spaces.** Clone `~/Spaces`, build `bin/w`, link it to `~/.local/bin/w`, and keep `workspaces.yaml`. The hubs point at `~/Projects`, so this waits on the repos being there.
+- **Herdr.** Install the `herdr` binary to `~/.local/bin/herdr` and copy `~/.config/herdr` (Catppuccin Latte theme).
+- **Git name and email.** Already handled by the Omarchy installer: `install/user/git.sh` writes `user.name` and `user.email` from the name and email entered at install. Aliases, `pull.rebase`, and the `gh` credential helper on this machine are extra and are not required to work.
+- **AWS SAM CLI.** Install `aws-sam-cli-bin`. This does not copy `~/.aws`.
+- **Obsidian.** Install `obsidian`. The vault is `~/Dropbox/Notes`, so it arrives with Dropbox. Launch Obsidian on the shelf at login, the way this machine opens it on the special workspace.
+- **Grok bot.** Install `grok-bot-bin`.
+- **TablePlus.** Install `tableplus`. Connections and passwords are in `~/.tableplus` and have to be copied to the new machine. Do not commit that directory.
+- **Fastpotify.** Install `fastpotify-bin`.
+- **qBittorrent.** Install `qbittorrent`, create `~/Torrents`, and set the default save path there instead of `~/Downloads`.
+- **Yaak.** Install `yaak-bin`. Requests live in `~/.local/share/app.yaak.desktop` (`db.sqlite`) and have to be copied. Do not commit that directory.
+- **VLC.** Install `vlc`.
+- **GIMP.** Install `gimp`.
+
 ## What stays out of this repository
 
 This repository is public because the bootstrap is fetched with `curl`. It holds the script and `vault-sync` only.
