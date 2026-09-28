@@ -335,6 +335,172 @@ restore_bookmarks() {
   say "bookmarks restored from Vault ($(bookmark_count "$BOOKMARKS"))"
 }
 
+cache_bookmark_favicons() {
+  [[ -f "$BOOKMARKS" ]] || return 0
+  python3 - "$BOOKMARKS" "$HOME/.config/chromium/Default/Favicons" <<'PY'
+import json, os, re, sqlite3, struct, time, urllib.parse, urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+bookmarks_path, db_path = __import__("sys").argv[1:]
+
+def walk(node, found):
+    if not isinstance(node, dict):
+        return
+    if node.get("type") == "url" and isinstance(node.get("url"), str):
+        found.append(node["url"])
+    for child in node.get("children") or []:
+        walk(child, found)
+
+try:
+    roots = json.load(open(bookmarks_path)).get("roots") or {}
+except Exception:
+    raise SystemExit(0)
+urls = []
+for root in roots.values():
+    walk(root, urls)
+pages = []
+seen = set()
+for url in urls:
+    if url in seen or not url.startswith(("http://", "https://")):
+        continue
+    seen.add(url)
+    pages.append(url)
+if not pages:
+    raise SystemExit(0)
+
+os.makedirs(os.path.dirname(db_path), exist_ok=True)
+db = sqlite3.connect(db_path)
+db.executescript("""
+CREATE TABLE IF NOT EXISTS meta(key LONGVARCHAR NOT NULL UNIQUE PRIMARY KEY, value LONGVARCHAR);
+CREATE TABLE IF NOT EXISTS icon_mapping(id INTEGER PRIMARY KEY, page_url LONGVARCHAR NOT NULL, icon_id INTEGER, page_url_type INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS favicons(id INTEGER PRIMARY KEY, url LONGVARCHAR NOT NULL, icon_type INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS favicon_bitmaps(id INTEGER PRIMARY KEY, icon_id INTEGER NOT NULL, last_updated INTEGER DEFAULT 0, image_data BLOB, width INTEGER DEFAULT 0, height INTEGER DEFAULT 0, last_requested INTEGER DEFAULT 0);
+CREATE INDEX IF NOT EXISTS icon_mapping_page_url_idx ON icon_mapping(page_url);
+CREATE INDEX IF NOT EXISTS icon_mapping_icon_id_idx ON icon_mapping(icon_id);
+CREATE INDEX IF NOT EXISTS favicons_url ON favicons(url);
+CREATE INDEX IF NOT EXISTS favicon_bitmaps_icon_id ON favicon_bitmaps(icon_id);
+""")
+db.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('version', '9')")
+db.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('last_compatible_version', '9')")
+db.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('mmap_status', '-1')")
+have = {row[0] for row in db.execute("SELECT page_url FROM icon_mapping")}
+pending = [url for url in pages if url not in have]
+if not pending:
+    print("bookmark favicons already cached")
+    raise SystemExit(0)
+
+def chrome_now():
+    return int((time.time() + 11644473600) * 1_000_000)
+
+def looks_like_image(blob):
+    if not blob or len(blob) < 8 or len(blob) > 300_000:
+        return False
+    return (
+        blob.startswith(b"\x89PNG\r\n\x1a\n")
+        or blob.startswith(b"\x00\x00\x01\x00")
+        or blob.startswith(b"\xff\xd8")
+        or blob.startswith(b"GIF8")
+        or (blob.startswith(b"RIFF") and blob[8:12] == b"WEBP")
+    )
+
+def image_size(blob):
+    if blob.startswith(b"\x89PNG\r\n\x1a\n") and len(blob) >= 24:
+        width, height = struct.unpack(">II", blob[16:24])
+        return int(width), int(height)
+    return 0, 0
+
+def fetch(url):
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(request, timeout=8) as response:
+        return response.read(300_000), response.geturl()
+
+def icon_for(page_url):
+    parts = urllib.parse.urlsplit(page_url)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    host = parts.hostname or ""
+    candidates = [origin + "/favicon.ico"]
+    if host:
+        candidates.append(f"https://icons.duckduckgo.com/ip3/{host}.ico")
+    for candidate in candidates:
+        try:
+            blob, final = fetch(candidate)
+        except Exception:
+            continue
+        if looks_like_image(blob):
+            return final, blob
+    try:
+        html, final = fetch(page_url)
+        text = html[:80_000].decode("utf-8", "ignore")
+    except Exception:
+        return None
+    for tag in re.findall(r"<link\b[^>]*>", text, re.I):
+        if not re.search(r"rel=['\"][^'\"]*icon", tag, re.I):
+            continue
+        match = re.search(r"href=['\"]([^'\"]+)", tag, re.I)
+        if not match:
+            continue
+        icon_url = urllib.parse.urljoin(final, match.group(1))
+        try:
+            blob, final_icon = fetch(icon_url)
+        except Exception:
+            continue
+        if looks_like_image(blob):
+            return final_icon, blob
+    return None
+
+by_origin = {}
+for page in pending:
+    parts = urllib.parse.urlsplit(page)
+    by_origin.setdefault(f"{parts.scheme}://{parts.netloc}", []).append(page)
+
+found = {}
+with ThreadPoolExecutor(max_workers=8) as pool:
+    futures = {pool.submit(icon_for, pages[0]): origin for origin, pages in by_origin.items()}
+    for future in as_completed(futures):
+        origin = futures[future]
+        try:
+            result = future.result()
+        except Exception:
+            result = None
+        if result:
+            found[origin] = result
+
+now = chrome_now()
+stored = 0
+icon_ids = {}
+for origin, page_list in by_origin.items():
+    got = found.get(origin)
+    if not got:
+        continue
+    icon_url, blob = got
+    icon_id = icon_ids.get(icon_url)
+    if icon_id is None:
+        row = db.execute("SELECT id FROM favicons WHERE url = ?", (icon_url,)).fetchone()
+        if row:
+            icon_id = row[0]
+        else:
+            cur = db.execute(
+                "INSERT INTO favicons(url, icon_type) VALUES (?, 1)",
+                (icon_url,),
+            )
+            icon_id = cur.lastrowid
+            width, height = image_size(blob)
+            db.execute(
+                "INSERT INTO favicon_bitmaps(icon_id, last_updated, image_data, width, height, last_requested) VALUES (?, ?, ?, ?, ?, ?)",
+                (icon_id, now, blob, width, height, now),
+            )
+        icon_ids[icon_url] = icon_id
+    for page in page_list:
+        db.execute(
+            "INSERT INTO icon_mapping(page_url, icon_id, page_url_type) VALUES (?, ?, 0)",
+            (page, icon_id),
+        )
+        stored += 1
+db.commit()
+print(f"cached {stored} bookmark favicons")
+PY
+}
+
 wait_for_chromium_profile() {
   local _
   if [[ -f "$PREFS" ]]; then
@@ -422,6 +588,8 @@ wait_for_chromium_profile || true
 close_chromium
 apply_chromium_prefs
 restore_bookmarks
+say "Caching bookmark favicons."
+cache_bookmark_favicons || say "bookmark favicons could not be cached"
 if command -v uwsm-app >/dev/null 2>&1; then
   uwsm-app -- chromium >/dev/null 2>&1 &
 else
