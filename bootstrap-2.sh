@@ -258,10 +258,10 @@ EOF
   say "extension policy written"
 }
 
-enable_vertical_tabs() {
-  python3 - "$PREFS" <<'PY'
+apply_chromium_prefs() {
+  python3 - "$PREFS" "$UBLOCK_ID" "$BITWARDEN_EXT_ID" <<'PY'
 import json, os, sys
-path = sys.argv[1]
+path, ublock, bitwarden = sys.argv[1:]
 os.makedirs(os.path.dirname(path), exist_ok=True)
 data = {}
 if os.path.exists(path) and os.path.getsize(path) > 0:
@@ -269,16 +269,56 @@ if os.path.exists(path) and os.path.getsize(path) > 0:
         data = json.load(open(path))
     except Exception:
         data = {}
-tabs = data.get("vertical_tabs") if isinstance(data.get("vertical_tabs"), dict) else {}
+
+def nest(root, *keys):
+    cur = root
+    for key in keys:
+        nxt = cur.get(key)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cur[key] = nxt
+        cur = nxt
+    return cur
+
+tabs = nest(data, "vertical_tabs")
 tabs["enabled"] = True
 tabs["enabled_first_time"] = True
-data["vertical_tabs"] = tabs
+
+hover = nest(data, "browser", "hovercard")
+hover["memory_usage_enabled"] = False
+
+bar = nest(data, "bookmark_bar")
+bar["show_tab_groups"] = False
+
+menu = nest(data, "everything_menu")
+menu["pinned_to_tabstrip"] = False
+
+ext = nest(data, "extensions")
+pinned = ext.get("pinned_extensions")
+if not isinstance(pinned, list):
+    pinned = []
+for extension_id in (ublock, bitwarden):
+    if extension_id not in pinned:
+        pinned.append(extension_id)
+ext["pinned_extensions"] = pinned
+
+toolbar = nest(data, "toolbar")
+actions = toolbar.get("pinned_actions")
+if not isinstance(actions, list):
+    actions = []
+for action in ("kActionDevTools", "kActionShowDownloads", "kActionQrCodeGenerator"):
+    if action not in actions:
+        actions.append(action)
+toolbar["pinned_actions"] = actions
+
 tmp = path + ".bootstrap"
 with open(tmp, "w") as fh:
     json.dump(data, fh)
 os.replace(tmp, path)
 PY
-  say "vertical tabs on"
+  say "vertical tabs on, tab memory and tab-group buttons off"
+  say "uBlock Origin Lite and Bitwarden pinned"
+  say "toolbar: developer tools, downloads, QR code"
 }
 
 restore_bookmarks() {
@@ -380,7 +420,7 @@ fi
 write_extension_policy
 wait_for_chromium_profile || true
 close_chromium
-enable_vertical_tabs
+apply_chromium_prefs
 restore_bookmarks
 if command -v uwsm-app >/dev/null 2>&1; then
   uwsm-app -- chromium >/dev/null 2>&1 &
