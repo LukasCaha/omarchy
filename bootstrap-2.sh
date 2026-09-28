@@ -5,6 +5,7 @@
 # 2. Bitwarden desktop, one sign-in, then the PC login unlocks it
 # 3. Chromium bookmarks, vertical tabs, uBlock Origin Lite, Bitwarden extension
 # 4. Vault sync: browser history and shell files copy when Chromium or bash exits
+# 5. SSH config and public keys from the Vault, private keys from the Bitwarden agent
 set -euo pipefail
 
 UBLOCK_ID="ddkjiahejlhfcafbddmgiahcphecmpfh"
@@ -581,6 +582,74 @@ print(f"cached {stored} bookmark favicons, {missed} still missing")
 PY
 }
 
+enable_bitwarden_ssh_agent() {
+  python3 - "$HOME/.config/Bitwarden/data.json" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+if not os.path.exists(path):
+    raise SystemExit(1)
+data = json.load(open(path))
+data["global_desktopSettings_sshAgentEnabled"] = True
+active = data.get("global_account_activeAccountId")
+if isinstance(active, str) and len(active) > 8:
+    data[f"{active}_desktopSettings_sshAgentRememberAuthorizations"] = "never"
+tmp = path + ".bootstrap"
+with open(tmp, "w") as fh:
+    json.dump(data, fh)
+os.replace(tmp, path)
+PY
+}
+
+install_ssh() {
+  local vault="$HOME/Dropbox/Vault/ssh"
+  local name src dst mode
+  mkdir -p "$HOME/.ssh" "$vault"
+  chmod 700 "$HOME/.ssh"
+  # Public files only. Private keys stay inside Bitwarden.
+  for name in config known_hosts id_ed25519.pub id_ed25519_vps.pub; do
+    src="$HOME/.ssh/$name"
+    dst="$vault/$name"
+    if [[ "$name" == *.pub ]]; then
+      mode=644
+    else
+      mode=600
+    fi
+    if [[ -f "$src" && ! -f "$dst" ]]; then
+      install -m "$mode" "$src" "$dst"
+    elif [[ -f "$dst" && ! -f "$src" ]]; then
+      install -m "$mode" "$dst" "$src"
+    fi
+  done
+  if enable_bitwarden_ssh_agent; then
+    if pgrep -x bitwarden >/dev/null 2>&1; then
+      killall bitwarden 2>/dev/null || true
+      local _
+      for _ in $(seq 1 20); do
+        pgrep -x bitwarden >/dev/null 2>&1 || break
+        sleep 0.5
+      done
+    fi
+    if command -v uwsm-app >/dev/null 2>&1; then
+      uwsm-app -- gtk-launch bitwarden >/dev/null 2>&1 &
+    else
+      gtk-launch bitwarden >/dev/null 2>&1 &
+    fi
+    local _
+    for _ in $(seq 1 30); do
+      [[ -S "$HOME/.bitwarden-ssh-agent.sock" ]] && break
+      sleep 0.5
+    done
+  fi
+  say "SSH config and public keys are in ~/.ssh."
+  say "Bitwarden serves the private keys on ~/.bitwarden-ssh-agent.sock."
+  say "Those keys have to be stored in Bitwarden as SSH keys. A secure note is not used."
+  if [[ -S "$HOME/.bitwarden-ssh-agent.sock" ]]; then
+    say "The Bitwarden SSH agent is listening."
+  else
+    say "The agent socket is not up yet. It appears after Bitwarden unlocks."
+  fi
+}
+
 install_vault_sync() {
   local dir src unit fetched
   src=""
@@ -758,3 +827,6 @@ fi
 say "Chromium is open with vertical tabs and bookmarks."
 say "uBlock Origin Lite and the Bitwarden extension install from the policy."
 say "The extension uses the Bitwarden app. Open it from the toolbar and choose Unlock with system authentication. It should not ask for the master password."
+
+say "5. SSH"
+install_ssh

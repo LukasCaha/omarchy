@@ -47,6 +47,10 @@ SHELL_FILES = (
     (os.path.join(HOME, ".profile"), os.path.join(VAULT_SHELL, "profile"), "text", ()),
     (os.path.join(HOME, ".bash_history"), os.path.join(VAULT_SHELL, "bash_history"), "lines", ()),
     (os.path.join(HOME, ".config/starship.toml"), os.path.join(VAULT_SHELL, "starship.toml"), "text", default_candidates("config/starship.toml")),
+    (os.path.join(HOME, ".ssh/config"), os.path.join(HOME, "Dropbox/Vault/ssh/config"), "text", ()),
+    (os.path.join(HOME, ".ssh/known_hosts"), os.path.join(HOME, "Dropbox/Vault/ssh/known_hosts"), "text", ()),
+    (os.path.join(HOME, ".ssh/id_ed25519.pub"), os.path.join(HOME, "Dropbox/Vault/ssh/id_ed25519.pub"), "text", ()),
+    (os.path.join(HOME, ".ssh/id_ed25519_vps.pub"), os.path.join(HOME, "Dropbox/Vault/ssh/id_ed25519_vps.pub"), "text", ()),
     (os.path.join(HOME, ".local/share/zoxide/db.zo"), os.path.join(VAULT_SHELL, "db.zo"), "bytes", ()),
 )
 
