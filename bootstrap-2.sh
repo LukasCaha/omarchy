@@ -43,6 +43,35 @@ archive_excluded() {
   dropbox-cli exclude list 2>/dev/null | grep -q 'Dropbox/Archive'
 }
 
+set_nautilus_bookmarks() {
+  local bookmarks="$HOME/.config/gtk-3.0/bookmarks"
+  mkdir -p "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"
+  cat >"$bookmarks" <<EOF
+file://$HOME/Desktop Desktop
+file://$HOME/Projects Projects
+file://$HOME/Downloads Downloads
+file://$HOME/Dropbox/Resources Resources
+file://$HOME/Dropbox/Screenshots Screenshots
+file://$HOME/Dropbox/ScreenRecordings ScreenRecordings
+file://$HOME/Dropbox Dropbox
+EOF
+  cp "$bookmarks" "$HOME/.config/gtk-4.0/bookmarks"
+  local path icon
+  while read -r path icon; do
+    [[ -d "$path" ]] || continue
+    gio set -t string "$path" metadata::custom-icon-name "$icon" >/dev/null
+  done <<EOF
+$HOME/Desktop user-desktop
+$HOME/Projects org.gnome.Software.Develop
+$HOME/Downloads folder-download
+$HOME/Dropbox/Resources folder-documents
+$HOME/Dropbox/Screenshots folder-pictures
+$HOME/Dropbox/ScreenRecordings folder-videos
+$HOME/Dropbox folder-dropbox
+EOF
+  say "Nautilus bookmarks are in the sidebar."
+}
+
 exclude_dropbox_archive() {
   if archive_excluded; then
     say "Dropbox/Archive stays online only"
@@ -414,6 +443,7 @@ EOF
   TRAY_PIN_COUNT="$pinned"
   say "Bar is transparent. Indicators and the clock seconds are on. Battery shows a percent. CPU temperature sits left of the battery."
   say "Screenshots go to ~/Dropbox/Screenshots and recordings to ~/Dropbox/ScreenRecordings after the next login."
+  set_nautilus_bookmarks
 }
 
 start_dropbox() {
