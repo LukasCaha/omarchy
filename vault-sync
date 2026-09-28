@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Copy browser and shell state through ~/Dropbox/Vault.
+
+Chromium history is copied only while Chromium is quit. The shell files are
+copied when an interactive bash exits, and pulled again when the next one starts.
+The richer copy wins when one side is almost empty, so a fresh profile does not
+wipe the Vault. Otherwise the newer file wins.
+"""
+
+import os
+import shutil
+import sqlite3
+import subprocess
+import sys
+import time
+
+HOME = os.path.expanduser("~")
+VAULT_BROWSER = os.path.join(HOME, "Dropbox/Vault/browser/chromium")
+VAULT_SHELL = os.path.join(HOME, "Dropbox/Vault/shell")
+PROFILE = os.path.join(HOME, ".config/chromium/Default")
+
+OMARCHY_ROOTS = (
+    os.path.join(HOME, ".local/share/omarchy"),
+    "/usr/share/omarchy",
+)
+
+
+def say(message):
+    print(f"vault-sync: {message}", flush=True)
+
+
+def chromium_running():
+    return subprocess.run(
+        ["pgrep", "-x", "chromium"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0
+
+
+def default_candidates(name):
+    return [os.path.join(root, name) for root in OMARCHY_ROOTS]
+
+
+SHELL_FILES = (
+    (os.path.join(HOME, ".bashrc"), os.path.join(VAULT_SHELL, "bashrc"), "text", default_candidates("default/bashrc")),
+    (os.path.join(HOME, ".bash_profile"), os.path.join(VAULT_SHELL, "bash_profile"), "text", ()),
+    (os.path.join(HOME, ".profile"), os.path.join(VAULT_SHELL, "profile"), "text", ()),
+    (os.path.join(HOME, ".bash_history"), os.path.join(VAULT_SHELL, "bash_history"), "lines", ()),
+    (os.path.join(HOME, ".config/starship.toml"), os.path.join(VAULT_SHELL, "starship.toml"), "text", default_candidates("config/starship.toml")),
+    (os.path.join(HOME, ".config/mise/config.toml"), os.path.join(VAULT_SHELL, "mise.toml"), "text", ()),
+    (os.path.join(HOME, ".local/share/zoxide/db.zo"), os.path.join(VAULT_SHELL, "db.zo"), "bytes", ()),
+)
+
+BROWSER_FILES = (
+    (os.path.join(PROFILE, "History"), os.path.join(VAULT_BROWSER, "History"), "history", ()),
+    (os.path.join(PROFILE, "Shortcuts"), os.path.join(VAULT_BROWSER, "Shortcuts"), "shortcuts", ()),
+)
+
+
+def read_text(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+def strip_hooks(text):
+    kept = []
+    skipping = False
+    for line in text.splitlines():
+        if "vault-sync:start" in line:
+            skipping = True
+            continue
+        if "vault-sync:end" in line:
+            skipping = False
+            continue
+        if not skipping:
+            kept.append(line)
+    body = "\n".join(kept).strip() + "\n"
+    while "\n\n\n" in body:
+        body = body.replace("\n\n\n", "\n\n")
+    return body
+
+
+def richness(path, kind):
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        return 0
+    if kind == "lines":
+        text = read_text(path) or ""
+        return sum(1 for line in text.splitlines() if line.strip())
+    if kind == "bytes" or kind == "text":
+        return os.path.getsize(path)
+    if kind == "history":
+        return sqlite_count(path, ("urls",))
+    if kind == "shortcuts":
+        return sqlite_count(path, ("omni_box_shortcuts",))
+    return os.path.getsize(path)
+
+
+def sqlite_count(path, tables):
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return os.path.getsize(path)
+    try:
+        for table in tables:
+            try:
+                return con.execute(f"select count(*) from {table}").fetchone()[0]
+            except sqlite3.Error:
+                continue
+        return os.path.getsize(path)
+    finally:
+        con.close()
+
+
+def is_stock(path, defaults, kind):
+    if kind != "text":
+        return False
+    local = read_text(path)
+    if local is None:
+        return False
+    for candidate in defaults:
+        stock = read_text(candidate)
+        if stock is not None and strip_hooks(local) == strip_hooks(stock):
+            return True
+    return False
+
+
+def almost_empty(local_score, vault_score):
+    if vault_score <= 0 or local_score >= vault_score:
+        return False
+    return local_score < 50 or local_score * 20 < vault_score
+
+
+def decide(local, vault, kind, defaults):
+    """Return 'pull', 'push', or 'skip'."""
+    local_exists = os.path.isfile(local) and os.path.getsize(local) > 0
+    vault_exists = os.path.isfile(vault) and os.path.getsize(vault) > 0
+    if not local_exists and not vault_exists:
+        return "skip"
+    if not vault_exists:
+        return "push"
+    if not local_exists:
+        return "pull"
+    local_stock = is_stock(local, defaults, kind)
+    vault_stock = is_stock(vault, defaults, kind)
+    if local_stock and vault_stock:
+        return "skip"
+    if local_stock and not vault_stock:
+        return "pull"
+    if vault_stock and not local_stock:
+        return "push"
+    local_score = richness(local, kind)
+    vault_score = richness(vault, kind)
+    if almost_empty(local_score, vault_score):
+        return "pull"
+    if almost_empty(vault_score, local_score):
+        return "push"
+    if os.path.getmtime(vault) > os.path.getmtime(local) + 1:
+        return "pull"
+    if os.path.getmtime(local) > os.path.getmtime(vault) + 1:
+        return "push"
+    return "skip"
+
+
+def copy_file(src, dst, kind):
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    tmp = dst + ".partial"
+    try:
+        if kind in ("history", "shortcuts"):
+            src_con = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+            dst_con = sqlite3.connect(tmp)
+            try:
+                src_con.backup(dst_con)
+            finally:
+                dst_con.close()
+                src_con.close()
+        else:
+            shutil.copyfile(src, tmp)
+    except (OSError, sqlite3.Error) as exc:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        say(f"could not copy {os.path.basename(src)}: {exc}")
+        return False
+    private = kind in ("history", "shortcuts", "lines", "bytes")
+    os.chmod(tmp, 0o600 if private else 0o644)
+    os.replace(tmp, dst)
+    if kind in ("history", "shortcuts"):
+        for suffix in ("-wal", "-shm", "-journal"):
+            extra = dst + suffix
+            if os.path.exists(extra):
+                os.remove(extra)
+    say(f"copied {os.path.basename(src)}")
+    return True
+
+
+def in_chromium_profile(path):
+    return path == PROFILE or path.startswith(PROFILE + os.sep)
+
+
+def sync_group(files, direction):
+    browser_blocked = chromium_running()
+    warned = False
+    for local, vault, kind, defaults in files:
+        if browser_blocked and in_chromium_profile(local):
+            if not warned:
+                say("Chromium is open, so History and Shortcuts stay where they are")
+                warned = True
+            continue
+        choice = decide(local, vault, kind, defaults)
+        if direction == "pull" and choice != "pull":
+            continue
+        if direction == "push" and choice != "push":
+            continue
+        if direction == "reconcile" and choice == "skip":
+            continue
+        if choice == "pull":
+            copy_file(vault, local, kind)
+        elif choice == "push":
+            copy_file(local, vault, kind)
+
+
+def files_for(target):
+    if target == "shell":
+        return SHELL_FILES
+    if target == "chromium":
+        return BROWSER_FILES
+    return SHELL_FILES + BROWSER_FILES
+
+
+RC_LOCALS = {
+    os.path.join(HOME, ".bashrc"),
+    os.path.join(HOME, ".bash_profile"),
+    os.path.join(HOME, ".profile"),
+}
+
+
+def shell_startup():
+    """Pull shell state. Exit 0 when bashrc itself was replaced and bash should re-exec."""
+    others = tuple(item for item in SHELL_FILES if item[0] not in RC_LOCALS)
+    rc_files = tuple(item for item in SHELL_FILES if item[0] in RC_LOCALS)
+    sync_group(others, "pull")
+    replaced = False
+    for local, vault, kind, defaults in rc_files:
+        if decide(local, vault, kind, defaults) == "pull" and copy_file(vault, local, kind):
+            replaced = True
+    raise SystemExit(0 if replaced else 1)
+
+
+def watch_chromium():
+    say("watching Chromium")
+    while True:
+        if chromium_running():
+            while chromium_running():
+                time.sleep(2)
+            time.sleep(1)
+            if chromium_running():
+                continue
+            sync_group(BROWSER_FILES, "push")
+        else:
+            sync_group(BROWSER_FILES, "pull")
+            for _ in range(5):
+                if chromium_running():
+                    break
+                time.sleep(1)
+
+
+def main(argv):
+    command = argv[1] if len(argv) > 1 else "reconcile"
+    target = argv[2] if len(argv) > 2 else "all"
+    if command == "watch-chromium":
+        watch_chromium()
+        return
+    if command == "shell-startup":
+        shell_startup()
+        return
+    if command not in ("pull", "push", "reconcile", "plan"):
+        say("use pull, push, reconcile, plan, shell-startup, or watch-chromium")
+        raise SystemExit(2)
+    selected = files_for(target)
+    if command == "plan":
+        for local, vault, kind, defaults in selected:
+            say(f"{decide(local, vault, kind, defaults)} {local}")
+        return
+    sync_group(selected, command)
+
+
+if __name__ == "__main__":
+    main(sys.argv)

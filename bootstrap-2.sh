@@ -4,6 +4,7 @@
 # 1. Dropbox service, then its own sign-in (the tray, not dropbox.com)
 # 2. Bitwarden desktop, one sign-in, then the PC login unlocks it
 # 3. Chromium bookmarks, vertical tabs, uBlock Origin Lite, Bitwarden extension
+# 4. Vault sync: browser history and shell files copy when Chromium or bash exits
 set -euo pipefail
 
 UBLOCK_ID="ddkjiahejlhfcafbddmgiahcphecmpfh"
@@ -580,6 +581,70 @@ print(f"cached {stored} bookmark favicons, {missed} still missing")
 PY
 }
 
+install_vault_sync() {
+  local dir src unit
+  dir=$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  src="$dir/vault-sync"
+  if [[ ! -f "$src" ]]; then
+    say "vault-sync is missing next to bootstrap-2.sh."
+    exit 1
+  fi
+  mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/Dropbox/Vault/shell"
+  install -m 0755 "$src" "$HOME/.local/bin/vault-sync"
+  if [[ ! -f "$HOME/.bashrc" ]]; then
+    if [[ -f "$HOME/.local/share/omarchy/default/bashrc" ]]; then
+      cp "$HOME/.local/share/omarchy/default/bashrc" "$HOME/.bashrc"
+    elif [[ -f /usr/share/omarchy/default/bashrc ]]; then
+      cp /usr/share/omarchy/default/bashrc "$HOME/.bashrc"
+    fi
+  fi
+  if [[ -f "$HOME/.bashrc" ]] && ! grep -q 'vault-sync:start' "$HOME/.bashrc"; then
+    python3 - "$HOME/.bashrc" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+hook = """
+# vault-sync:start
+if [[ -z ${VAULT_SYNC_REEXEC:-} && -x "$HOME/.local/bin/vault-sync" ]]; then
+  if "$HOME/.local/bin/vault-sync" shell-startup; then
+    export VAULT_SYNC_REEXEC=1
+    exec bash
+  fi
+fi
+# vault-sync:end
+"""
+marker = "[[ $- != *i* ]] && return\n"
+if marker in text:
+    text = text.replace(marker, marker + hook, 1)
+else:
+    text = hook + text
+if "vault-sync\" push shell" not in text:
+    text += """
+# vault-sync:start
+[[ -x "$HOME/.local/bin/vault-sync" ]] && trap 'history -a; "$HOME/.local/bin/vault-sync" push shell' EXIT
+# vault-sync:end
+"""
+path.write_text(text)
+PY
+  fi
+  unit="$HOME/.config/systemd/user/vault-sync.service"
+  cat >"$unit" <<'EOF'
+[Unit]
+Description=Copy Chromium history into Dropbox when Chromium exits
+
+[Service]
+ExecStart=%h/.local/bin/vault-sync watch-chromium
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+  say "Vault sync is installed."
+  say "History and Shortcuts copy into Dropbox when Chromium quits."
+  say "Shell config and bash history copy into Dropbox when a terminal exits."
+}
+
 wait_for_chromium_profile() {
   local _
   if [[ -f "$PREFS" ]]; then
@@ -669,6 +734,13 @@ apply_chromium_prefs
 restore_bookmarks
 say "Caching bookmark favicons."
 cache_bookmark_favicons || say "bookmark favicons could not be cached"
+say "4. Vault sync"
+install_vault_sync
+"$HOME/.local/bin/vault-sync" reconcile
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl --user daemon-reload
+  systemctl --user enable --now vault-sync.service
+fi
 if command -v uwsm-app >/dev/null 2>&1; then
   uwsm-app -- chromium >/dev/null 2>&1 &
 else
