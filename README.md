@@ -16,7 +16,7 @@ The script asks for your password when it writes the Chromium extension policy a
 
 ### Keyboard
 
-Czech QWERTZ is applied before any later password prompt, and saved in `~/.config/hypr/input.lua` for the next login. Scroll direction is natural scrolling, for the mouse and the touchpad: the content follows your fingers.
+Czech QWERTZ is applied before any later password prompt, and saved in `~/.config/hypr/input.lua`. Scroll follows the wheel, for the mouse and the touchpad: down moves the page down. Hyprland is reloaded so that takes effect in the current session.
 
 ### Dropbox
 

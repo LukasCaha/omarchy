@@ -188,39 +188,42 @@ set_keyboard() {
   hyprctl keyword input:kb_layout cz >/dev/null
   hyprctl keyword input:kb_variant '' >/dev/null
   hyprctl keyword input:kb_options 'compose:caps,shift:both_capslock_cancel' >/dev/null
-  hyprctl keyword input:natural_scroll true >/dev/null || true
-  hyprctl keyword input:touchpad:natural_scroll true >/dev/null || true
+  hyprctl keyword input:natural_scroll false >/dev/null || true
+  hyprctl keyword input:touchpad:natural_scroll false >/dev/null || true
   mkdir -p "$(dirname "$INPUT_LUA")"
   if [[ ! -f "$INPUT_LUA" ]] || ! grep -q 'kb_layout = "cz"' "$INPUT_LUA"; then
     cat >>"$INPUT_LUA" <<'EOF'
 
--- Czech QWERTZ and inverted scroll. Written by bootstrap-2.sh.
+-- Czech QWERTZ. Scroll follows the wheel. Written by bootstrap-2.sh.
 hl.config({
   input = {
     kb_layout = "cz",
     kb_variant = "",
     kb_options = "compose:caps,shift:both_capslock_cancel",
-    natural_scroll = true,
+    natural_scroll = false,
     touchpad = {
-      natural_scroll = true,
+      natural_scroll = false,
     },
   },
 })
 EOF
-  elif ! grep -q 'natural_scroll = true' "$INPUT_LUA"; then
+  elif ! grep -q 'natural_scroll = false' "$INPUT_LUA"; then
     python3 - "$INPUT_LUA" <<'PY'
 import pathlib, sys
 path = pathlib.Path(sys.argv[1])
 text = path.read_text()
+text = text.replace("natural_scroll = true", "natural_scroll = false")
 needle = 'kb_options = "compose:caps,shift:both_capslock_cancel",'
 insert = needle + """
-    natural_scroll = true,
+    natural_scroll = false,
     touchpad = {
-      natural_scroll = true,
+      natural_scroll = false,
     },"""
-if needle not in text:
-    raise SystemExit("keyboard block not found")
-path.write_text(text.replace(needle, insert, 1))
+if "natural_scroll = false" not in text:
+    if needle not in text:
+        raise SystemExit("keyboard block not found")
+    text = text.replace(needle, insert, 1)
+path.write_text(text)
 PY
   fi
   if [[ -f /etc/vconsole.conf ]] && grep -q '^KEYMAP=cz$' /etc/vconsole.conf && grep -q '^XKBLAYOUT=cz$' /etc/vconsole.conf; then
@@ -241,8 +244,9 @@ PY
       "$HOME/.config/fcitx5/profile"
     fcitx5-remote -r >/dev/null 2>&1 || true
   fi
+  hyprctl reload >/dev/null || true
   say "Czech QWERTZ is on. Type passwords with that layout."
-  say "Scroll is inverted from the Omarchy default, for the mouse and the touchpad."
+  say "Scroll follows the wheel: down moves the page down."
 }
 
 install_bar_helpers() {
@@ -405,7 +409,7 @@ configure_bar() {
   [[ -s "$cfg" ]] && src="$cfg"
   mkdir -p "$(dirname "$cfg")"
   python3 - "$src" "$cfg" "$HOME/.local/bin/bar-clock" "$HOME/.local/bin/cpu-temp-bar" "$HOME/.local/bin/bar-battery-pct" <<'PY'
-import json, sys
+import json, os, sys
 src, dest, clock_exec, temp_exec, battery_exec = sys.argv[1:]
 with open(src) as fh:
     data = json.load(fh)
@@ -494,7 +498,6 @@ tmp = dest + ".bootstrap"
 with open(tmp, "w") as fh:
     json.dump(data, fh, indent=2)
     fh.write("\n")
-os.replace = __import__("os").replace
 os.replace(tmp, dest)
 PY
   if command -v omarchy-shell >/dev/null 2>&1; then
@@ -520,6 +523,28 @@ set_latte_second_wallpaper() {
   say "Wallpaper: ${bg##*/}"
 }
 
+set_capture_dirs() {
+  mkdir -p "$HOME/Dropbox/Screenshots" "$HOME/Dropbox/ScreenRecordings"
+  mkdir -p "$HOME/.config/uwsm/env.d"
+  cat >"$HOME/.config/uwsm/env.d/capture" <<EOF
+export OMARCHY_SCREENSHOT_DIR="\$HOME/Dropbox/Screenshots"
+export OMARCHY_SCREENRECORD_DIR="\$HOME/Dropbox/ScreenRecordings"
+EOF
+  local hypr="$HOME/.config/hypr/hyprland.lua"
+  if [[ -f "$hypr" ]] && ! grep -q "bootstrap-2 capture dirs" "$hypr"; then
+    cat >>"$hypr" <<'EOF'
+
+-- bootstrap-2 capture dirs
+hl.env("OMARCHY_SCREENSHOT_DIR", (os.getenv("HOME") or "") .. "/Dropbox/Screenshots")
+hl.env("OMARCHY_SCREENRECORD_DIR", (os.getenv("HOME") or "") .. "/Dropbox/ScreenRecordings")
+EOF
+  fi
+  hyprctl keyword env OMARCHY_SCREENSHOT_DIR,"$HOME/Dropbox/Screenshots" >/dev/null || true
+  hyprctl keyword env OMARCHY_SCREENRECORD_DIR,"$HOME/Dropbox/ScreenRecordings" >/dev/null || true
+  hyprctl reload >/dev/null || true
+  say "Screenshots go to ~/Dropbox/Screenshots and recordings to ~/Dropbox/ScreenRecordings."
+}
+
 set_desktop() {
   say "Theme: Catppuccin Latte"
   omarchy theme set "Catppuccin Latte"
@@ -529,18 +554,12 @@ set_desktop() {
   fi
   say "Font: Geist Mono"
   omarchy font set "GeistMono Nerd Font"
+  set_capture_dirs
+  set_nautilus_bookmarks
   install_bar_helpers
   configure_bar
-  mkdir -p "$HOME/Dropbox/Screenshots" "$HOME/Dropbox/ScreenRecordings"
-  mkdir -p "$HOME/.config/uwsm/env.d"
-  cat >"$HOME/.config/uwsm/env.d/capture" <<EOF
-export OMARCHY_SCREENSHOT_DIR="\$HOME/Dropbox/Screenshots"
-export OMARCHY_SCREENRECORD_DIR="\$HOME/Dropbox/ScreenRecordings"
-EOF
   say "Bar is transparent. Tray icons stay open. The clock and CPU temperature update every second."
   say "CPU temperature sits left of the battery and opens btop. The battery percent sits to the right of the battery icon."
-  say "Screenshots go to ~/Dropbox/Screenshots and recordings to ~/Dropbox/ScreenRecordings after the next login."
-  set_nautilus_bookmarks
 }
 
 start_dropbox() {
