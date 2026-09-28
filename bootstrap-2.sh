@@ -582,15 +582,24 @@ PY
 }
 
 install_vault_sync() {
-  local dir src unit
-  dir=$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-  src="$dir/vault-sync"
-  if [[ ! -f "$src" ]]; then
-    say "vault-sync is missing next to bootstrap-2.sh."
-    exit 1
+  local dir src unit fetched
+  src=""
+  fetched=""
+  if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+    dir=$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    if [[ -f "$dir/vault-sync" ]]; then
+      src="$dir/vault-sync"
+    fi
+  fi
+  # curl | sh has no script path, so the helper is not sitting next to it.
+  if [[ -z "$src" ]]; then
+    fetched=$(mktemp)
+    src="$fetched"
+    curl -fsSL "https://raw.githubusercontent.com/LukasCaha/omarchy/main/vault-sync" -o "$src"
   fi
   mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/Dropbox/Vault/shell"
   install -m 0755 "$src" "$HOME/.local/bin/vault-sync"
+  [[ -n "$fetched" ]] && rm -f "$fetched"
   if [[ ! -f "$HOME/.bashrc" ]]; then
     if [[ -f "$HOME/.local/share/omarchy/default/bashrc" ]]; then
       cp "$HOME/.local/share/omarchy/default/bashrc" "$HOME/.bashrc"
