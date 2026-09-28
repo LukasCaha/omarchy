@@ -47,7 +47,6 @@ SHELL_FILES = (
     (os.path.join(HOME, ".profile"), os.path.join(VAULT_SHELL, "profile"), "text", ()),
     (os.path.join(HOME, ".bash_history"), os.path.join(VAULT_SHELL, "bash_history"), "lines", ()),
     (os.path.join(HOME, ".config/starship.toml"), os.path.join(VAULT_SHELL, "starship.toml"), "text", default_candidates("config/starship.toml")),
-    (os.path.join(HOME, ".config/mise/config.toml"), os.path.join(VAULT_SHELL, "mise.toml"), "text", ()),
     (os.path.join(HOME, ".local/share/zoxide/db.zo"), os.path.join(VAULT_SHELL, "db.zo"), "bytes", ()),
 )
 
@@ -127,6 +126,16 @@ def is_stock(path, defaults, kind):
     return False
 
 
+def same_file(a, b):
+    try:
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        with open(a, "rb") as left, open(b, "rb") as right:
+            return left.read() == right.read()
+    except OSError:
+        return False
+
+
 def almost_empty(local_score, vault_score):
     if vault_score <= 0 or local_score >= vault_score:
         return False
@@ -143,6 +152,8 @@ def decide(local, vault, kind, defaults):
         return "push"
     if not local_exists:
         return "pull"
+    if kind in ("text", "lines", "bytes") and same_file(local, vault):
+        return "skip"
     local_stock = is_stock(local, defaults, kind)
     vault_stock = is_stock(vault, defaults, kind)
     if local_stock and vault_stock:
