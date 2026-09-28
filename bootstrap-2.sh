@@ -44,6 +44,9 @@ archive_excluded() {
 }
 
 set_nautilus_bookmarks() {
+  # Omarchy sets the desktop directory to $HOME, so no Desktop folder exists.
+  mkdir -p "$HOME/Desktop"
+  xdg-user-dirs-update --set DESKTOP "$HOME/Desktop"
   local bookmarks="$HOME/.config/gtk-3.0/bookmarks"
   mkdir -p "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"
   cat >"$bookmarks" <<EOF
