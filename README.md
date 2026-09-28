@@ -88,6 +88,16 @@ The screenshot and recording paths are read at login. They apply after the next 
 
 Nautilus gets these sidebar bookmarks, each with an icon: Desktop, Projects, Downloads, Dropbox Resources, Screenshots, ScreenRecordings, and Dropbox. Omarchy does not create `~/Desktop` on its own, because it sets the desktop directory to your home folder. The script creates `~/Desktop` and points the desktop directory there.
 
+### Work apps
+
+Installs these if they are missing: AWS SAM CLI, Grok bot, Fastpotify, VLC, GIMP, TablePlus, Yaak, qBittorrent, and Obsidian.
+
+qBittorrent's default save path is `~/Torrents`. The script creates that folder.
+
+Obsidian opens the Notes vault at `~/Dropbox/Notes`. The notes themselves come from Dropbox. The script waits until that folder has synced, registers it as the open vault, and starts Obsidian on the shelf at login. Super+S still toggles the shelf.
+
+Yaak directory sync uses `~/Dropbox/Vault/yaak`. On a machine that already has requests and an empty sync folder, the script sets that path and Yaak writes one YAML file per request. On a new machine the script waits until those files have synced. Yaak will not import them into a blank workspace on its own: in Yaak, use the workspace menu, **Open Folder**, and choose `~/Dropbox/Vault/yaak`. Environments stay out of the folder until you mark them sharable.
+
 ## What you still do by hand
 
 The script prints this list when it finishes:
@@ -97,6 +107,7 @@ The script prints this list when it finishes:
 3. In the extension, under **Account security**, turn on **Share unlock with Desktop**. If that line is missing, use **Unlock with biometrics**.
 4. In the extension, set timeout to Never and timeout action to Lock, if those controls are still shown.
 5. If no tray icons were open yet, right-click the `<` on the bar and pin each one.
+6. In Yaak, if the requests are not already open: workspace menu, **Open Folder**, `~/Dropbox/Vault/yaak`.
 
 Put the SSH private keys into Bitwarden as SSH keys before expecting `ssh` to work. Sign in to Dropbox from the tray, and to the Bitwarden desktop app, the first time.
 
@@ -111,7 +122,7 @@ Put the SSH private keys into Bitwarden as SSH keys before expecting `ssh` to wo
 - It does not move existing screenshots and recordings into Dropbox. It only changes where new ones are saved, after the next login.
 - It does not exclude any Dropbox folder except `Archive`.
 - It does not theme Waybar. Omarchy 4 uses its own bar.
-- It does not change window rules, keybindings, monitors, or the wallpaper beyond the Catppuccin Latte theme.
+- It does not change keybindings or monitors. The only extra window rule puts Obsidian on the shelf. The wallpaper change is the second Catppuccin Latte image.
 - It does not publish anything in `~/Dropbox/Vault` to this git repository.
 
 ## Todo
@@ -123,15 +134,9 @@ Not in the script yet. Packages can be installed by the script. Repos, `.env` fi
 - **Spaces.** Clone `~/Spaces`, build `bin/w`, link it to `~/.local/bin/w`, and keep `workspaces.yaml`. The hubs point at `~/Projects`, so this waits on the repos being there.
 - **Herdr.** Install the `herdr` binary to `~/.local/bin/herdr` and copy `~/.config/herdr` (Catppuccin Latte theme).
 - **Git name and email.** Already handled by the Omarchy installer: `install/user/git.sh` writes `user.name` and `user.email` from the name and email entered at install. Aliases, `pull.rebase`, and the `gh` credential helper on this machine are extra and are not required to work.
-- **AWS SAM CLI.** Install `aws-sam-cli-bin`. This does not copy `~/.aws`.
-- **Obsidian.** Install `obsidian`. The vault is `~/Dropbox/Notes`, so it arrives with Dropbox. Launch Obsidian on the shelf at login, the way this machine opens it on the special workspace.
-- **Grok bot.** Install `grok-bot-bin`.
-- **TablePlus.** Install `tableplus`. Connections and passwords are in `~/.tableplus` and have to be copied to the new machine. Do not commit that directory.
-- **Fastpotify.** Install `fastpotify-bin`.
-- **qBittorrent.** Install `qbittorrent`, create `~/Torrents`, and set the default save path there instead of `~/Downloads`.
-- **Yaak.** Install `yaak-bin`. Requests live in `~/.local/share/app.yaak.desktop` (`db.sqlite`) and have to be copied. Do not commit that directory.
-- **VLC.** Install `vlc`.
-- **GIMP.** Install `gimp`.
+- **AWS credentials.** SAM CLI is installed. `~/.aws` is not copied.
+- **TablePlus connections.** The app is installed. Passwords live in `~/.tableplus` and have to be copied to the new machine. Do not commit that directory.
+- **Yaak environments.** Requests sync through `~/Dropbox/Vault/yaak`. Environment variables stay on this machine until each environment is marked sharable in Yaak. Do not commit that folder.
 
 ## What stays out of this repository
 

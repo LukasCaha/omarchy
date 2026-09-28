@@ -7,6 +7,7 @@
 # 4. Vault sync: browser history and shell files copy when Chromium or bash exits
 # 5. SSH config and public keys from the Vault, private keys from the Bitwarden agent
 # 6. Desktop: inverted scroll, Catppuccin Latte, Geist, bar, screenshot folders
+# 7. Work apps: SAM CLI, Obsidian Notes on the shelf, qBittorrent, and the rest
 set -euo pipefail
 
 UBLOCK_ID="ddkjiahejlhfcafbddmgiahcphecmpfh"
@@ -560,6 +561,181 @@ set_desktop() {
   configure_bar
   say "Bar is transparent. Tray icons stay open. The clock and CPU temperature update every second."
   say "CPU temperature sits left of the battery and opens btop. The battery percent sits to the right of the battery icon."
+}
+
+install_work_apps() {
+  local -a wanted=(
+    aws-sam-cli-bin
+    grok-bot-bin
+    fastpotify-bin
+    vlc
+    gimp
+    tableplus
+    yaak-bin
+    qbittorrent
+    obsidian
+  )
+  local -a missing=()
+  local pkg
+  for pkg in "${wanted[@]}"; do
+    if ! pkg_present "$pkg"; then
+      missing+=("$pkg")
+    fi
+  done
+  if ((${#missing[@]})); then
+    omarchy-pkg-add "${missing[@]}"
+  fi
+  say "Work apps are installed."
+}
+
+set_qbittorrent_save_path() {
+  mkdir -p "$HOME/Torrents" "$HOME/.config/qBittorrent"
+  python3 - "$HOME/.config/qBittorrent/qBittorrent.conf" "$HOME/Torrents" <<'PY'
+import pathlib, sys
+conf, save = pathlib.Path(sys.argv[1]), sys.argv[2]
+key = "Session\\DefaultSavePath"
+text = conf.read_text() if conf.exists() else ""
+lines = text.splitlines()
+out = []
+in_bt = False
+found = False
+for line in lines:
+    if line.startswith("[") and line.endswith("]"):
+        if in_bt and not found:
+            out.append(f"{key}={save}")
+            found = True
+        in_bt = line == "[BitTorrent]"
+    if in_bt and line.startswith(key + "="):
+        out.append(f"{key}={save}")
+        found = True
+        continue
+    out.append(line)
+if in_bt and not found:
+    out.append(f"{key}={save}")
+    found = True
+if not found:
+    if out and out[-1] != "":
+        out.append("")
+    out += ["[BitTorrent]", f"{key}={save}"]
+conf.write_text("\n".join(out).rstrip() + "\n")
+PY
+  say "qBittorrent saves to ~/Torrents."
+}
+
+set_obsidian_notes() {
+  local notes="$HOME/Dropbox/Notes"
+  say "Waiting for the Notes vault in Dropbox."
+  until [[ -d "$notes" ]]; do
+    sleep 2
+  done
+  mkdir -p "$HOME/.config/obsidian"
+  python3 - "$HOME/.config/obsidian/obsidian.json" "$notes" <<'PY'
+import json, os, sys, time
+path, notes = sys.argv[1], sys.argv[2]
+data = {"vaults": {}}
+if os.path.exists(path):
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except json.JSONDecodeError:
+        data = {"vaults": {}}
+if not isinstance(data, dict):
+    data = {"vaults": {}}
+vaults = data.setdefault("vaults", {})
+if not isinstance(vaults, dict):
+    vaults = {}
+    data["vaults"] = vaults
+target = os.path.realpath(notes)
+found = False
+for vault in vaults.values():
+    if isinstance(vault, dict) and os.path.realpath(vault.get("path", "")) == target:
+        vault["open"] = True
+        found = True
+if not found:
+    vaults["dropbox-notes"] = {"path": notes, "ts": int(time.time() * 1000), "open": True}
+with open(path, "w") as fh:
+    json.dump(data, fh, indent=2)
+    fh.write("\n")
+PY
+  local autostart="$HOME/.config/hypr/autostart.lua"
+  mkdir -p "$HOME/.config/hypr"
+  if [[ ! -f "$autostart" ]]; then
+    printf '%s\n' "-- Extra autostart processes." >"$autostart"
+  fi
+  if ! grep -q "bootstrap-2 obsidian shelf" "$autostart"; then
+    cat >>"$autostart" <<EOF
+
+-- bootstrap-2 obsidian shelf
+o.window("^obsidian$", { workspace = "special:scratchpad silent" })
+o.launch_on_start("obsidian ${notes}")
+EOF
+  fi
+  hyprctl reload >/dev/null 2>&1 || true
+  if ! pgrep -x obsidian >/dev/null 2>&1; then
+    if command -v uwsm-app >/dev/null 2>&1; then
+      uwsm-app -- obsidian "$notes" >/dev/null 2>&1 &
+    else
+      obsidian "$notes" >/dev/null 2>&1 &
+    fi
+  fi
+  say "Obsidian opens ~/Dropbox/Notes on the shelf."
+}
+
+set_yaak_directory_sync() {
+  local dir="$HOME/Dropbox/Vault/yaak"
+  local db="$HOME/.local/share/app.yaak.desktop/db.sqlite"
+  mkdir -p "$dir"
+  if [[ -f "$db" ]] && python3 - "$db" "$dir" <<'PY'
+import sqlite3, sys
+db, directory = sys.argv[1:]
+con = sqlite3.connect(db)
+row = con.execute(
+    "select count(*) from workspace_metas where setting_sync_dir = ?",
+    (directory,),
+).fetchone()
+raise SystemExit(0 if row and row[0] else 1)
+PY
+  then
+    say "Yaak syncs requests to ~/Dropbox/Vault/yaak."
+    return 0
+  fi
+  if ! find "$dir" -maxdepth 1 -name 'yaak.wk_*.yaml' -print -quit | grep -q .; then
+    if [[ -f "$db" ]]; then
+      if pgrep -x yaak-app >/dev/null 2>&1 || pgrep -x yaak-app-client >/dev/null 2>&1; then
+        killall yaak-app yaak-app-client yaaknode >/dev/null 2>&1 || true
+        sleep 1
+      fi
+      python3 - "$db" "$dir" <<'PY'
+import sqlite3, sys
+db, directory = sys.argv[1:]
+con = sqlite3.connect(db)
+con.execute(
+    """
+    update workspace_metas
+    set setting_sync_dir = ?, updated_at = CURRENT_TIMESTAMP
+    where ifnull(setting_sync_dir, '') = ''
+    """,
+    (directory,),
+)
+con.commit()
+PY
+      if command -v uwsm-app >/dev/null 2>&1; then
+        uwsm-app -- yaak-app >/dev/null 2>&1 &
+      else
+        yaak-app >/dev/null 2>&1 &
+      fi
+      say "Yaak writes requests to ~/Dropbox/Vault/yaak."
+      say "Private environments stay out of that folder until you mark them sharable."
+      return 0
+    fi
+    say "Waiting for Yaak requests in ~/Dropbox/Vault/yaak."
+    until find "$dir" -maxdepth 1 -name 'yaak.wk_*.yaml' -print -quit | grep -q .; do
+      sleep 2
+    done
+  fi
+  say "Yaak requests are in ~/Dropbox/Vault/yaak."
+  say "In Yaak: workspace menu, Open Folder, and choose that directory."
+  say "Private environments stay out of that folder until you mark them sharable."
 }
 
 start_dropbox() {
@@ -1242,6 +1418,12 @@ install_ssh
 
 say "6. Desktop"
 set_desktop
+
+say "7. Work apps"
+install_work_apps
+set_qbittorrent_save_path
+set_obsidian_notes
+set_yaak_directory_sync
 
 say ""
 say "Still to do by hand:"
