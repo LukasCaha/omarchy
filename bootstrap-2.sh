@@ -6,6 +6,7 @@
 # 3. Chromium bookmarks, vertical tabs, uBlock Origin Lite, Bitwarden extension
 # 4. Vault sync: browser history and shell files copy when Chromium or bash exits
 # 5. SSH config and public keys from the Vault, private keys from the Bitwarden agent
+# 6. Desktop: inverted scroll, Catppuccin Latte, Geist, bar, screenshot folders
 set -euo pipefail
 
 UBLOCK_ID="ddkjiahejlhfcafbddmgiahcphecmpfh"
@@ -133,19 +134,40 @@ set_keyboard() {
   hyprctl keyword input:kb_layout cz >/dev/null
   hyprctl keyword input:kb_variant '' >/dev/null
   hyprctl keyword input:kb_options 'compose:caps,shift:both_capslock_cancel' >/dev/null
+  hyprctl keyword input:natural_scroll true >/dev/null || true
+  hyprctl keyword input:touchpad:natural_scroll true >/dev/null || true
   mkdir -p "$(dirname "$INPUT_LUA")"
   if [[ ! -f "$INPUT_LUA" ]] || ! grep -q 'kb_layout = "cz"' "$INPUT_LUA"; then
     cat >>"$INPUT_LUA" <<'EOF'
 
--- Czech QWERTZ. Written by bootstrap-2.sh.
+-- Czech QWERTZ and inverted scroll. Written by bootstrap-2.sh.
 hl.config({
   input = {
     kb_layout = "cz",
     kb_variant = "",
     kb_options = "compose:caps,shift:both_capslock_cancel",
+    natural_scroll = true,
+    touchpad = {
+      natural_scroll = true,
+    },
   },
 })
 EOF
+  elif ! grep -q 'natural_scroll = true' "$INPUT_LUA"; then
+    python3 - "$INPUT_LUA" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+needle = 'kb_options = "compose:caps,shift:both_capslock_cancel",'
+insert = needle + """
+    natural_scroll = true,
+    touchpad = {
+      natural_scroll = true,
+    },"""
+if needle not in text:
+    raise SystemExit("keyboard block not found")
+path.write_text(text.replace(needle, insert, 1))
+PY
   fi
   if [[ -f /etc/vconsole.conf ]] && grep -q '^KEYMAP=cz$' /etc/vconsole.conf && grep -q '^XKBLAYOUT=cz$' /etc/vconsole.conf; then
     :
@@ -166,6 +188,210 @@ EOF
     fcitx5-remote -r >/dev/null 2>&1 || true
   fi
   say "Czech QWERTZ is on. Type passwords with that layout."
+  say "Scroll is inverted from the Omarchy default, for the mouse and the touchpad."
+}
+
+install_cpu_temp_bar() {
+  mkdir -p "$HOME/.local/bin"
+  cat >"$HOME/.local/bin/cpu-temp-bar" <<'EOF'
+#!/usr/bin/env python3
+import glob
+import os
+
+cands = []
+for path in sorted(glob.glob("/sys/class/hwmon/hwmon*/temp*_input")):
+    base = os.path.dirname(path)
+    key = os.path.basename(path)[: -len("_input")]
+    label = ""
+    label_path = os.path.join(base, key + "_label")
+    if os.path.isfile(label_path):
+        label = open(label_path).read().strip().lower()
+    name = ""
+    name_path = os.path.join(base, "name")
+    if os.path.isfile(name_path):
+        name = open(name_path).read().strip().lower()
+    try:
+        milli = int(open(path).read().strip())
+    except Exception:
+        continue
+    if milli <= 0 or milli > 150000:
+        continue
+    blob = label + " " + name
+    score = 0
+    if any(part in blob for part in ("tctl", "package", "cpu", "k10temp", "coretemp", "zenpower")):
+        score = 2
+    elif "edge" in blob or "composite" in blob:
+        score = 1
+    cands.append((score, milli))
+if not cands:
+    raise SystemExit
+cands.sort(key=lambda item: (-item[0], -item[1]))
+print(f"\uf2c9 {cands[0][1] / 1000:.0f}°")
+EOF
+  chmod 755 "$HOME/.local/bin/cpu-temp-bar"
+}
+
+configure_bar() {
+  local cfg="$HOME/.config/omarchy/shell.json"
+  local defaults="${OMARCHY_PATH:-/usr/share/omarchy}/config/omarchy/shell.json"
+  local src="$defaults"
+  [[ -s "$cfg" ]] && src="$cfg"
+  mkdir -p "$(dirname "$cfg")"
+  python3 - "$src" "$cfg" "$HOME/.local/bin/cpu-temp-bar" <<'PY'
+import json, sys
+src, dest, exec_path = sys.argv[1:]
+with open(src) as fh:
+    data = json.load(fh)
+data["version"] = 1
+bar = data.setdefault("bar", {})
+bar["transparent"] = True
+layout = bar.setdefault("layout", {})
+for section in ("left", "center", "right"):
+    layout.setdefault(section, [])
+
+def entries(section):
+    out = []
+    for entry in layout.get(section) or []:
+        if isinstance(entry, str):
+            entry = {"id": entry}
+        if isinstance(entry, dict):
+            out.append(entry)
+    return out
+
+def find(section, widget_id):
+    for entry in entries(section):
+        if entry.get("id") == widget_id:
+            return entry
+    return None
+
+indicators = find("center", "omarchy.indicators")
+if indicators is None:
+    layout["center"] = [{"id": "omarchy.indicators", "alwaysShow": True}] + entries("center")
+else:
+    indicators["alwaysShow"] = True
+    layout["center"] = entries("center")
+
+clock = find("center", "omarchy.clock")
+if clock is None:
+    layout["center"] = entries("center") + [{"id": "omarchy.clock", "format": "dddd HH:mm:ss"}]
+else:
+    clock["format"] = "dddd HH:mm:ss"
+    layout["center"] = entries("center")
+
+power = find("right", "omarchy.power")
+if power is None:
+    layout["right"] = entries("right") + [{"id": "omarchy.power", "showPercentage": True}]
+else:
+    power["showPercentage"] = True
+    layout["right"] = entries("right")
+
+cpu = {
+    "id": "cpu-temp",
+    "type": "command",
+    "exec": exec_path,
+    "interval": 2,
+    "tooltip": "CPU temperature",
+}
+right = [entry for entry in entries("right") if entry.get("id") != "cpu-temp"]
+index = next((i for i, entry in enumerate(right) if entry.get("id") == "omarchy.power"), len(right))
+right.insert(index, cpu)
+layout["right"] = right
+
+tmp = dest + ".bootstrap"
+with open(tmp, "w") as fh:
+    json.dump(data, fh, indent=2)
+    fh.write("\n")
+os_replace = __import__("os").replace
+os_replace(tmp, dest)
+PY
+  if command -v omarchy-shell >/dev/null 2>&1; then
+    omarchy-shell shell reloadConfig >/dev/null 2>&1 || omarchy-restart-shell >/dev/null 2>&1 || true
+  fi
+}
+
+pin_open_tray_icons() {
+  python3 - "$HOME/.config/omarchy/shell.json" <<'PY'
+import json, os, subprocess, sys
+path = sys.argv[1]
+if not os.path.isfile(path):
+    print(0)
+    raise SystemExit
+
+def busctl(*args):
+    return subprocess.check_output(["busctl", "--user", "--json=short", *args], text=True, stderr=subprocess.DEVNULL)
+
+ids = []
+try:
+    raw = busctl("call", "org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems")
+    items = json.loads(raw).get("data", [[]])[0]
+except Exception:
+    items = []
+for item in items:
+    if not isinstance(item, str) or "/" not in item:
+        continue
+    service, rest = item.split("/", 1)
+    object_path = "/" + rest
+    ids.append(item)
+    tail = object_path.rsplit("/", 1)[-1]
+    if tail:
+        ids.append(tail)
+    try:
+        prop = busctl("get-property", service, object_path, "org.kde.StatusNotifierItem", "Id")
+        value = json.loads(prop).get("data")
+        if isinstance(value, str) and value:
+            ids.append(value)
+    except Exception:
+        pass
+ids = list(dict.fromkeys(ids))
+with open(path) as fh:
+    data = json.load(fh)
+right = data.setdefault("bar", {}).setdefault("layout", {}).setdefault("right", [])
+tray = None
+for entry in right:
+    if isinstance(entry, dict) and entry.get("id") == "omarchy.tray":
+        tray = entry
+        break
+if tray is None:
+    tray = {"id": "omarchy.tray"}
+    right.insert(0, tray)
+pinned = [item for item in tray.get("pinned", []) if isinstance(item, str)]
+for item in ids:
+    if item not in pinned:
+        pinned.append(item)
+tray["pinned"] = pinned
+tmp = path + ".bootstrap"
+with open(tmp, "w") as fh:
+    json.dump(data, fh, indent=2)
+    fh.write("\n")
+os.replace(tmp, path)
+print(len(ids))
+PY
+}
+
+set_desktop() {
+  say "Theme: Catppuccin Latte"
+  omarchy theme set "Catppuccin Latte"
+  if ! fc-list : family | grep -Fqi "GeistMono Nerd Font"; then
+    omarchy-pkg-add otf-geist-mono-nerd
+  fi
+  say "Font: Geist Mono"
+  omarchy font set "GeistMono Nerd Font"
+  install_cpu_temp_bar
+  configure_bar
+  local pinned
+  pinned=$(pin_open_tray_icons || echo 0)
+  if command -v omarchy-shell >/dev/null 2>&1; then
+    omarchy-shell shell reloadConfig >/dev/null 2>&1 || true
+  fi
+  mkdir -p "$HOME/Dropbox/Screenshots" "$HOME/Dropbox/ScreenRecordings"
+  mkdir -p "$HOME/.config/uwsm/env.d"
+  cat >"$HOME/.config/uwsm/env.d/capture" <<EOF
+export OMARCHY_SCREENSHOT_DIR="\$HOME/Dropbox/Screenshots"
+export OMARCHY_SCREENRECORD_DIR="\$HOME/Dropbox/ScreenRecordings"
+EOF
+  TRAY_PIN_COUNT="$pinned"
+  say "Bar is transparent. Indicators and the clock seconds are on. Battery shows a percent. CPU temperature sits left of the battery."
+  say "Screenshots go to ~/Dropbox/Screenshots and recordings to ~/Dropbox/ScreenRecordings after the next login."
 }
 
 start_dropbox() {
@@ -845,9 +1071,15 @@ say "uBlock Origin Lite and the Bitwarden extension install from the policy."
 say "5. SSH"
 install_ssh
 
+say "6. Desktop"
+set_desktop
+
 say ""
 say "Still to do by hand:"
 say "1. In the Bitwarden app: Settings, Unlock with system authentication. The script records the setting. The unlock key is created only when that box is checked."
 say "2. In the Chromium Bitwarden extension: sign in once, to the same EU account."
 say "3. Extension Settings, Account security: Share unlock with Desktop. If that line is missing, Unlock with biometrics."
 say "4. In the extension, Timeout Never and Timeout action Lock, if those controls are still shown and not managed by the desktop app."
+if [[ "${TRAY_PIN_COUNT:-0}" == 0 ]]; then
+  say "5. On the bar, right-click the < and pin each tray icon. Pinned icons stay on the bar."
+fi
