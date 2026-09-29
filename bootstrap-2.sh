@@ -44,6 +44,29 @@ archive_excluded() {
   dropbox-cli exclude list 2>/dev/null | grep -q 'Dropbox/Archive'
 }
 
+restore_filezilla_and_fonts() {
+  local src="$HOME/Dropbox/Vault/filezilla"
+  local dst="$HOME/.config/filezilla"
+  local fonts="$HOME/Dropbox/Vault/fonts"
+  local f
+  if [[ -d "$src" ]]; then
+    mkdir -p "$dst"
+    for f in sitemanager.xml recentservers.xml filezilla.xml trustedcerts.xml layout.xml; do
+      [[ -f "$src/$f" ]] || continue
+      install -m 600 "$src/$f" "$dst/$f"
+    done
+    say "FileZilla sites are restored."
+  else
+    say "No FileZilla sites in the Vault yet."
+  fi
+  if [[ -d "$fonts" ]]; then
+    mkdir -p "$HOME/.local/share/fonts"
+    cp -a "$fonts/." "$HOME/.local/share/fonts/"
+    fc-cache -f "$HOME/.local/share/fonts" >/dev/null 2>&1 || true
+    say "Local fonts are installed."
+  fi
+}
+
 link_home_dir_into_dropbox() {
   local name="$1" xdg="$2"
   local cloud="$HOME/Dropbox/$name"
@@ -637,7 +660,7 @@ install_aur_pkgs() {
 
 install_work_apps() {
   # Official repositories. omarchy-pkg-add only calls pacman.
-  install_repo_pkgs aws-cli github-cli vlc gimp qbittorrent obsidian python-secretstorage python-yaml
+  install_repo_pkgs aws-cli github-cli vlc gimp qbittorrent obsidian filezilla python-secretstorage python-yaml
   if ! pkg_present yaak; then
     if pacman -Si yaak &>/dev/null; then
       omarchy-pkg-add yaak
@@ -1961,6 +1984,7 @@ fi
 "$HOME/.local/bin/vault-sync" reconcile || say "TablePlus sync did not finish."
 apply_local_domains
 sync_wifi_credentials
+restore_filezilla_and_fonts
 
 say ""
 say "Still to do by hand:"

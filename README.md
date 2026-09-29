@@ -147,7 +147,9 @@ Not in the script yet. Packages can be installed by the script. Repos, `.env` fi
 - **Projects.** `~/Projects` is the big one. The Youklid repos live only on this disk. The new machine needs those clones, including anything not pushed.
 - **Laravel `.env` files and local project data.** Done. `env-push` copies gitignored env files, `credentials/`, local databases, and `storage/app` to `~/Dropbox/Vault/projects/<folder>`. On the new machine, `cd` into the cloned repo and run `env-pull`. Do not commit that folder.
 - **Spaces.** Done. `spaces-push` copies each space under `~/Spaces` (or `~/Spaces/hubs` until you flatten it) to `~/Dropbox/Vault/spaces`. Symlinks are stored as paths, not as the projects they point at. `spaces-pull` recreates `~/Spaces/<space>` and those symlinks. The `w` command is not copied.
-- **Herdr.** Install the `herdr` binary to `~/.local/bin/herdr` and copy `~/.config/herdr`. `config.toml` is only the Catppuccin Latte theme. `session.json` is the seven workspaces under `~/Projects`, so this waits on those repos.
+- **Herdr.** Left fresh on each machine. Omarchy 4 already installs it. The session of seven workspaces is recreated there, not copied.
+- **FileZilla.** Done. Site manager, recent servers, and trusted certificates copy to `~/Dropbox/Vault/filezilla`. Passwords stay in those files. Do not commit that folder.
+- **Fonts.** Done. Graphik, Agrandir, Anton, and Inter copy to `~/Dropbox/Vault/fonts` and install into `~/.local/share/fonts`.
 - **Local domains.** `~/.config/domains/sites` and the `domains` command sync through `~/Dropbox/Vault/domains`. The script writes those names into `/etc/hosts` and points `*.test` at `127.0.0.1` with dnsmasq. Port 8000 is just where the app listens.
 - **Wi-Fi.** Saved networks, including passwords, copy to `~/Dropbox/Vault/wifi`. The new machine installs them for iwd, which is the Wi-Fi menu. NetworkManager is disabled, so its profiles alone do not show up there. Do not commit that folder.
 - **Cursor skills `/dr` and `/save`.** Done. `vault-sync` copies `~/.cursor/skills/dr` and `~/.cursor/skills/save` to `~/Dropbox/Vault/cursor/skills`. Do not commit that folder.
