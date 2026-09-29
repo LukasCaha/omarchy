@@ -44,16 +44,48 @@ archive_excluded() {
   dropbox-cli exclude list 2>/dev/null | grep -q 'Dropbox/Archive'
 }
 
+link_desktop_into_dropbox() {
+  local cloud="$HOME/Dropbox/Desktop"
+  local desk="$HOME/Desktop"
+  mkdir -p "$cloud"
+  if [[ -L "$desk" && "$(readlink -f "$desk")" == "$(readlink -f "$cloud")" ]]; then
+    xdg-user-dirs-update --set DESKTOP "$desk"
+    say "Desktop is ~/Dropbox/Desktop."
+    return 0
+  fi
+  if [[ -d "$desk" && ! -L "$desk" ]]; then
+    local item base
+    shopt -s dotglob nullglob
+    for item in "$desk"/*; do
+      base="$(basename "$item")"
+      if [[ -e "$cloud/$base" ]]; then
+        say "Left $base in ~/Desktop because ~/Dropbox/Desktop already has it."
+        continue
+      fi
+      mv "$item" "$cloud/$base"
+    done
+    shopt -u dotglob nullglob
+    if ! rmdir "$desk" 2>/dev/null; then
+      say "Desktop still has files that were not moved, so it was not switched to Dropbox."
+      return 0
+    fi
+  fi
+  ln -s "$cloud" "$desk"
+  xdg-user-dirs-update --set DESKTOP "$desk"
+  say "Desktop is ~/Dropbox/Desktop."
+}
+
 set_nautilus_bookmarks() {
   # Omarchy sets the desktop directory to $HOME, so no Desktop folder exists.
-  mkdir -p "$HOME/Desktop"
-  xdg-user-dirs-update --set DESKTOP "$HOME/Desktop"
+  link_desktop_into_dropbox
+  mkdir -p "$HOME/Torrents"
   local bookmarks="$HOME/.config/gtk-3.0/bookmarks"
   mkdir -p "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"
   cat >"$bookmarks" <<EOF
 file://$HOME/Desktop Desktop
 file://$HOME/Projects Projects
 file://$HOME/Downloads Downloads
+file://$HOME/Torrents Torrents
 file://$HOME/Dropbox/Resources Resources
 file://$HOME/Dropbox/Screenshots Screenshots
 file://$HOME/Dropbox/ScreenRecordings ScreenRecordings
@@ -68,6 +100,7 @@ EOF
 $HOME/Desktop user-desktop
 $HOME/Projects org.gnome.Software.Develop
 $HOME/Downloads folder-download
+$HOME/Torrents qbittorrent
 $HOME/Dropbox/Resources folder-documents
 $HOME/Dropbox/Screenshots folder-pictures
 $HOME/Dropbox/ScreenRecordings folder-videos

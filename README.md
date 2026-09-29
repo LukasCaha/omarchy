@@ -88,7 +88,7 @@ Public SSH files move between `~/.ssh` and `~/Dropbox/Vault/ssh` when one side i
 
 The screenshot and recording paths are read at login. They apply after the next login.
 
-Nautilus gets these sidebar bookmarks, each with an icon: Desktop, Projects, Downloads, Dropbox Resources, Screenshots, ScreenRecordings, and Dropbox. Omarchy does not create `~/Desktop` on its own, because it sets the desktop directory to your home folder. The script creates `~/Desktop` and points the desktop directory there.
+Nautilus gets these sidebar bookmarks, each with an icon: Desktop, Projects, Downloads, Torrents, Dropbox Resources, Screenshots, ScreenRecordings, and Dropbox. `~/Desktop` is a shortcut to `~/Dropbox/Desktop`, so those files sync. Omarchy does not create `~/Desktop` on its own, because it sets the desktop directory to your home folder. The script creates the Dropbox folder, points `~/Desktop` at it, and points the desktop directory there.
 
 ### Work apps
 
