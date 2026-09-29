@@ -119,6 +119,7 @@ The script prints this list when it finishes:
 5. If no tray icons were open yet, right-click the `<` on the bar and pin each one.
 6. In a terminal, `agent` is `~/.local/bin/agent`. Sign in once if the CLI asks.
 7. In a terminal: `gh auth login`.
+8. In a terminal: `aws configure`.
 
 Put the SSH private keys into Bitwarden as SSH keys before expecting `ssh` to work. Sign in to Dropbox from the tray, and to the Bitwarden desktop app, the first time.
 
@@ -148,7 +149,7 @@ Not in the script yet. Packages can be installed by the script. Repos, `.env` fi
 - **GitHub login.** Name and email are already written by the Omarchy installer. Push and pull on this machine go through `gh`, and that token sits in the login keyring, so it does not come across. On the new machine, install `github-cli` and run `gh auth login` once. That sets the credential helper too.
 - **AWS credentials.** The AWS CLI and SAM CLI are installed. `~/.aws` is not copied. Test the default profile with `aws sts get-caller-identity`. If the login has expired, run `aws login`. The separate `cursor` profile is `aws sts get-caller-identity --profile cursor`.
 - **TablePlus.** Done. `vault-sync` copies connection settings and keyring passwords to `~/Dropbox/Vault/tableplus` about every 30 seconds. Do not commit that folder.
-- **Yaak environments.** Requests sync through `~/Dropbox/Vault/yaak`. Environment variables stay on this machine until each environment is marked sharable in Yaak. Do not commit that folder.
+- **Yaak.** Done. Requests sync through `~/Dropbox/Vault/yaak`. Environments are not used.
 
 ## What stays out of this repository
 

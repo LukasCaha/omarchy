@@ -1699,3 +1699,4 @@ say "2. In the Chromium Bitwarden extension: sign in once, to the same EU accoun
 say "3. Extension Settings, Account security: Share unlock with Desktop. If that line is missing, Unlock with biometrics."
 say "4. In the extension, Timeout Never and Timeout action Lock, if those controls are still shown and not managed by the desktop app."
 say "5. In a terminal: gh auth login"
+say "6. In a terminal: aws configure"
