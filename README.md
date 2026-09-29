@@ -94,7 +94,9 @@ Nautilus gets these sidebar bookmarks, each with an icon: Desktop, Projects, Dow
 
 Installs these if they are missing. `omarchy-pkg-add` only uses pacman, so AUR packages go through `omarchy-pkg-aur-add`.
 
-From the repositories: AWS CLI, VLC, GIMP, qBittorrent, Obsidian, Yaak, and `python-secretstorage`. From the AUR: AWS SAM CLI (`aws-sam-cli-bin`), Grok bot (`grok-bot-bin`), Fastpotify (`fastpotify-bin`), and TablePlus. If Yaak is not in the repositories, the script installs `yaak-bin` instead.
+From the repositories: AWS CLI, VLC, GIMP, qBittorrent, Obsidian, Yaak, and `python-secretstorage`. From the AUR: AWS SAM CLI (`aws-sam-cli-bin`), Grok bot (`grok-bot-bin`), and Fastpotify (`fastpotify-bin`). If Yaak is not in the repositories, the script installs `yaak-bin` instead.
+
+TablePlus is the AUR package `tableplus`. TablePlus only publishes a `.deb`, and that AUR package builds it with `makepkg`. The libraries come from Arch. The PKGBUILD pins a `.deb` TablePlus has already removed, so the download returns 404. The script keeps the AUR package and points that build at the `.deb` that is still published.
 
 The Cursor agent CLI is installed with the official installer when `agent` is not already on `PATH`. That puts `agent` in `~/.local/bin`.
 

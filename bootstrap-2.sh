@@ -611,9 +611,69 @@ install_work_apps() {
     fi
   fi
   # AUR. These names are not in pacman, which is why a single omarchy-pkg-add failed.
-  install_aur_pkgs aws-sam-cli-bin grok-bot-bin fastpotify-bin tableplus
+  install_aur_pkgs aws-sam-cli-bin grok-bot-bin fastpotify-bin
+  install_tableplus
   install_cursor_agent
   say "Work apps are installed."
+}
+
+install_tableplus() {
+  if pkg_present tableplus; then
+    say "TablePlus is already installed."
+    return 0
+  fi
+  install_aur_pkgs tableplus
+  if pkg_present tableplus; then
+    return 0
+  fi
+  # TablePlus only publishes a .deb. The AUR package is that deb, built with
+  # makepkg. Its PKGBUILD pins a deb TablePlus has already removed, so the
+  # build 404s. Point the same PKGBUILD at the deb that is still online.
+  say "The AUR TablePlus package points at a removed deb. Building it with the current one."
+  install_repo_pkgs gtksourceview3 libgee gnome-keyring base-devel
+  local pool suffix sumline page deb ver url work sum
+  case "$(uname -m)" in
+    aarch64|arm64)
+      pool="https://deb.tableplus.com/debian/24-arm/pool/main/t/tableplus/"
+      suffix="arm64"
+      sumline="sha256sums_aarch64"
+      ;;
+    *)
+      pool="https://deb.tableplus.com/debian/24/pool/main/t/tableplus/"
+      suffix="amd64"
+      sumline="sha256sums_x86_64"
+      ;;
+  esac
+  page=$(curl -fsSL "$pool")
+  deb=$(printf '%s\n' "$page" | grep -oE "tableplus_[0-9.]+_${suffix}\\.deb" | sort -V | tail -1)
+  if [[ -z "$deb" ]]; then
+    say "TablePlus deb was not found."
+    return 0
+  fi
+  ver=${deb#tableplus_}
+  ver=${ver%_${suffix}.deb}
+  url="${pool}${deb}"
+  work=$(mktemp -d)
+  git clone --depth 1 https://aur.archlinux.org/tableplus.git "$work/tableplus"
+  curl -fsSL -o "$work/tableplus.deb" "$url"
+  sum=$(sha256sum "$work/tableplus.deb" | awk '{print $1}')
+  rm -f "$work/tableplus.deb"
+  python3 - "$work/tableplus/PKGBUILD" "$ver" "$sumline" "$sum" <<'PY'
+import pathlib, sys
+path, ver, sumline, digest = sys.argv[1:]
+lines = pathlib.Path(path).read_text().splitlines()
+out = []
+for line in lines:
+    if line.startswith("pkgver="):
+        line = f"pkgver={ver}"
+    elif line.startswith(f"{sumline}="):
+        line = f"{sumline}=('{digest}')"
+    out.append(line)
+pathlib.Path(path).write_text("\n".join(out) + "\n")
+PY
+  (cd "$work/tableplus" && makepkg -si --noconfirm)
+  rm -rf "$work"
+  say "TablePlus is installed from the AUR package, using ${deb}."
 }
 
 install_cursor_agent() {
