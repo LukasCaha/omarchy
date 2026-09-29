@@ -1,16 +1,16 @@
 # Omarchy bootstrap
 
-Personal setup for a fresh [Omarchy](https://omarchy.org/) 4.0.4 install. `bootstrap-2.sh` is safe to run again. It skips work that is already done.
+Personal setup for a fresh [Omarchy](https://omarchy.org/) 4.0.4 install. `bootstrap.sh` is safe to run again. It skips work that is already done.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/LukasCaha/omarchy/main/bootstrap-2.sh | sh
+curl -fsSL https://raw.githubusercontent.com/LukasCaha/omarchy/main/bootstrap.sh | sh
 ```
 
-From a checkout of this repo, `./bootstrap-2.sh` uses the `vault-sync` file next to it. The `curl` form downloads `vault-sync` from this same repository.
+From a checkout of this repo, `./bootstrap.sh` uses the `vault-sync` file next to it. The `curl` form downloads `vault-sync` from this same repository.
 
 The script asks for your password when it writes the Chromium extension policy and the Bitwarden unlock rule. Dropbox and Bitwarden each need one sign-in in their own window. The script waits for those and then continues.
 
-`bootstrap.sh` is the older checklist. Use `bootstrap-2.sh`.
+`bootstrap-graphic.sh` is the older checklist. Use `bootstrap.sh`.
 
 ## What it does
 
