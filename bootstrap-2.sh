@@ -1935,3 +1935,6 @@ say "3. Extension Settings, Account security: Share unlock with Desktop. If that
 say "4. In the extension, Timeout Never and Timeout action Lock, if those controls are still shown and not managed by the desktop app."
 say "5. In a terminal: gh auth login"
 say "6. In a terminal: aws configure"
+say "7. Clone the GitHub repos into ~/Projects, with the same folder names as on this PC."
+say "8. In each cloned repo: env-pull"
+say "9. In a terminal: spaces-pull"

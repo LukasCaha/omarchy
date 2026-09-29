@@ -120,6 +120,9 @@ The script prints this list when it finishes:
 6. In a terminal, `agent` is `~/.local/bin/agent`. Sign in once if the CLI asks.
 7. In a terminal: `gh auth login`.
 8. In a terminal: `aws configure`.
+9. Clone the GitHub repos into `~/Projects`, with the same folder names as on this PC.
+10. In each cloned repo, run `env-pull`.
+11. In a terminal, run `spaces-pull`.
 
 Put the SSH private keys into Bitwarden as SSH keys before expecting `ssh` to work. Sign in to Dropbox from the tray, and to the Bitwarden desktop app, the first time.
 
