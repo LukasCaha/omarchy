@@ -190,12 +190,13 @@ set_keyboard() {
   hyprctl keyword input:kb_variant '' >/dev/null
   hyprctl keyword input:kb_options 'compose:caps,shift:both_capslock_cancel' >/dev/null
   hyprctl keyword input:natural_scroll false >/dev/null || true
-  hyprctl keyword input:touchpad:natural_scroll false >/dev/null || true
+  hyprctl keyword input:touchpad:natural_scroll true >/dev/null || true
   mkdir -p "$(dirname "$INPUT_LUA")"
   if [[ ! -f "$INPUT_LUA" ]] || ! grep -q 'kb_layout = "cz"' "$INPUT_LUA"; then
     cat >>"$INPUT_LUA" <<'EOF'
 
--- Czech QWERTZ. Scroll follows the wheel. Written by bootstrap-2.sh.
+-- Czech QWERTZ. Mouse follows the wheel. Touchpad scroll is reversed.
+-- Written by bootstrap-2.sh.
 hl.config({
   input = {
     kb_layout = "cz",
@@ -203,30 +204,34 @@ hl.config({
     kb_options = "compose:caps,shift:both_capslock_cancel",
     natural_scroll = false,
     touchpad = {
-      natural_scroll = false,
+      natural_scroll = true,
     },
   },
 })
 EOF
-  elif ! grep -q 'natural_scroll = false' "$INPUT_LUA"; then
-    python3 - "$INPUT_LUA" <<'PY'
+  fi
+  python3 - "$INPUT_LUA" <<'PY'
 import pathlib, sys
 path = pathlib.Path(sys.argv[1])
 text = path.read_text()
-text = text.replace("natural_scroll = true", "natural_scroll = false")
-needle = 'kb_options = "compose:caps,shift:both_capslock_cancel",'
-insert = needle + """
-    natural_scroll = false,
-    touchpad = {
+old = """    touchpad = {
       natural_scroll = false,
     },"""
-if "natural_scroll = false" not in text:
+new = """    touchpad = {
+      natural_scroll = true,
+    },"""
+if old in text:
+    text = text.replace(old, new, 1)
+elif "touchpad" not in text:
+    needle = 'kb_options = "compose:caps,shift:both_capslock_cancel",'
+    insert = needle + """
+    natural_scroll = false,
+""" + new
     if needle not in text:
         raise SystemExit("keyboard block not found")
     text = text.replace(needle, insert, 1)
 path.write_text(text)
 PY
-  fi
   if [[ -f /etc/vconsole.conf ]] && grep -q '^KEYMAP=cz$' /etc/vconsole.conf && grep -q '^XKBLAYOUT=cz$' /etc/vconsole.conf; then
     :
   else
@@ -591,13 +596,13 @@ install_aur_pkgs() {
     if pkg_present "$pkg"; then
       continue
     fi
-    omarchy-pkg-aur-add "$pkg"
+    omarchy-pkg-aur-add "$pkg" || say "Could not install $pkg."
   done
 }
 
 install_work_apps() {
   # Official repositories. omarchy-pkg-add only calls pacman.
-  install_repo_pkgs aws-cli vlc gimp qbittorrent obsidian python-secretstorage
+  install_repo_pkgs aws-cli vlc gimp qbittorrent obsidian python-secretstorage python-yaml
   if ! pkg_present yaak; then
     if pacman -Si yaak &>/dev/null; then
       omarchy-pkg-add yaak
@@ -612,11 +617,15 @@ install_work_apps() {
 }
 
 install_cursor_agent() {
-  if command -v agent >/dev/null 2>&1; then
+  if [[ -x "$HOME/.local/bin/agent" ]]; then
     say "Cursor agent CLI is already installed."
     return 0
   fi
   curl -fsSL https://cursor.com/install | bash
+  if [[ ! -x "$HOME/.local/bin/agent" ]]; then
+    say "Cursor agent CLI did not install."
+    return 0
+  fi
   say "Cursor agent CLI is installed. The command is agent."
 }
 
@@ -690,24 +699,38 @@ with open(path, "w") as fh:
     fh.write("\n")
 PY
   local autostart="$HOME/.config/hypr/autostart.lua"
+  local encoded notes_url
+  encoded=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$notes")
+  notes_url="obsidian://open?path=${encoded}"
   mkdir -p "$HOME/.config/hypr"
   if [[ ! -f "$autostart" ]]; then
     printf '%s\n' "-- Extra autostart processes." >"$autostart"
   fi
-  if ! grep -q "bootstrap-2 obsidian shelf" "$autostart"; then
-    cat >>"$autostart" <<EOF
-
+  python3 - "$autostart" "$notes_url" <<'PY'
+import pathlib, sys
+path, url = pathlib.Path(sys.argv[1]), sys.argv[2]
+text = path.read_text() if path.exists() else "-- Extra autostart processes.\n"
+start = text.find("-- bootstrap-2 obsidian shelf")
+if start != -1:
+    text = text[:start].rstrip() + "\n"
+text += f"""
 -- bootstrap-2 obsidian shelf
-o.window("^obsidian$", { workspace = "special:scratchpad silent" })
-o.launch_on_start("obsidian ${notes}")
-EOF
-  fi
+o.window("^obsidian$", {{ workspace = "special:scratchpad silent" }})
+o.window("md.obsidian.Obsidian", {{ workspace = "special:scratchpad silent" }})
+o.launch_on_start("obsidian {url}")
+"""
+path.write_text(text)
+PY
   hyprctl reload >/dev/null 2>&1 || true
-  if ! pgrep -x obsidian >/dev/null 2>&1; then
+  if pgrep -x obsidian >/dev/null 2>&1; then
+    killall obsidian >/dev/null 2>&1 || true
+    sleep 1
+  fi
+  if command -v obsidian >/dev/null 2>&1; then
     if command -v uwsm-app >/dev/null 2>&1; then
-      uwsm-app -- obsidian "$notes" >/dev/null 2>&1 &
+      uwsm-app -- obsidian "$notes_url" >/dev/null 2>&1 &
     else
-      obsidian "$notes" >/dev/null 2>&1 &
+      obsidian "$notes_url" >/dev/null 2>&1 &
     fi
   fi
   say "Obsidian opens ~/Dropbox/Notes on the shelf."
@@ -765,8 +788,153 @@ PY
       sleep 2
     done
   fi
-  say "Yaak requests are in ~/Dropbox/Vault/yaak."
-  say "In Yaak: workspace menu, Open Folder, and choose that directory."
+  if [[ ! -f "$db" ]]; then
+    if command -v uwsm-app >/dev/null 2>&1; then
+      uwsm-app -- yaak-app >/dev/null 2>&1 &
+    else
+      yaak-app >/dev/null 2>&1 &
+    fi
+    local _
+    for _ in $(seq 1 40); do
+      [[ -f "$db" ]] && break
+      sleep 0.5
+    done
+    killall yaak-app yaak-app-client yaaknode >/dev/null 2>&1 || true
+    sleep 1
+  fi
+  if [[ ! -f "$db" ]]; then
+    say "Yaak did not create its database, so the requests were not imported."
+    return 0
+  fi
+  if pgrep -x yaak-app >/dev/null 2>&1 || pgrep -x yaak-app-client >/dev/null 2>&1; then
+    killall yaak-app yaak-app-client yaaknode >/dev/null 2>&1 || true
+    sleep 1
+  fi
+  python3 - "$db" "$dir" <<'PY'
+import json, os, sqlite3, sys
+from datetime import date, datetime
+from pathlib import Path
+try:
+    import yaml
+except ImportError:
+    raise SystemExit("python-yaml is not installed")
+
+db_path, sync_dir = sys.argv[1], sys.argv[2]
+tables = {
+    "workspace": "workspaces",
+    "http_request": "http_requests",
+    "folder": "folders",
+    "grpc_request": "grpc_requests",
+    "websocket_request": "websocket_requests",
+    "environment": "environments",
+}
+
+def snake(name):
+    out = []
+    for index, char in enumerate(name):
+        if char.isupper() and index:
+            out.append("_")
+        out.append(char.lower())
+    return "".join(out)
+
+def json_default(value):
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, date):
+        return value.isoformat()
+    raise TypeError(f"cannot encode {type(value).__name__}")
+
+def cell(value):
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, separators=(",", ":"), default=json_default)
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, bool):
+        return int(value)
+    return value
+
+con = sqlite3.connect(db_path)
+columns = {}
+for table in set(tables.values()) | {"workspace_metas"}:
+    columns[table] = [row[1] for row in con.execute(f"pragma table_info({table})")]
+imported = {"http_requests": 0}
+workspace_id = None
+documents = []
+for path in Path(sync_dir).glob("yaak.*.yaml"):
+    document = yaml.safe_load(path.read_text())
+    if isinstance(document, dict):
+        documents.append(document)
+documents.sort(key=lambda document: {
+    "workspace": 0,
+    "folder": 1,
+    "environment": 2,
+    "http_request": 3,
+    "grpc_request": 3,
+    "websocket_request": 3,
+}.get(document.get("model"), 9))
+for document in documents:
+    table = tables.get(document.get("model"))
+    if table is None:
+        continue
+    data = {}
+    for key, value in document.items():
+        column = snake(key)
+        if column in columns[table]:
+            data[column] = cell(value)
+    if "id" not in data:
+        continue
+    if table == "workspaces":
+        workspace_id = data["id"]
+    names = list(data)
+    placeholders = ",".join("?" for _ in names)
+    updates = ",".join(f"{name}=excluded.{name}" for name in names if name != "id")
+    con.execute(
+        f"insert into {table} ({','.join(names)}) values ({placeholders}) on conflict(id) do update set {updates}",
+        [data[name] for name in names],
+    )
+    imported[table] = imported.get(table, 0) + 1
+if workspace_id is None:
+    raise SystemExit("Yaak workspace file was not imported")
+meta_cols = columns["workspace_metas"]
+existing = con.execute(
+    "select id from workspace_metas where workspace_id = ?",
+    (workspace_id,),
+).fetchone()
+if existing:
+    con.execute(
+        "update workspace_metas set setting_sync_dir = ?, updated_at = CURRENT_TIMESTAMP where workspace_id = ?",
+        (sync_dir, workspace_id),
+    )
+else:
+    con.execute(
+        """
+        insert into workspace_metas (id, model, workspace_id, setting_sync_dir)
+        values (?, 'workspace_meta', ?, ?)
+        """,
+        (f"wm_{workspace_id[3:]}", workspace_id, sync_dir),
+    )
+for (other_id,) in con.execute("select id from workspaces where id != ?", (workspace_id,)):
+    requests = con.execute(
+        "select count(*) from http_requests where workspace_id = ?",
+        (other_id,),
+    ).fetchone()[0]
+    if requests:
+        continue
+    for table in ("http_requests", "folders", "environments", "grpc_requests", "websocket_requests", "workspace_metas"):
+        if "workspace_id" in columns.get(table, []):
+            con.execute(f"delete from {table} where workspace_id = ?", (other_id,))
+    con.execute("delete from workspaces where id = ?", (other_id,))
+con.commit()
+print(f"imported {imported.get('http_requests', 0)} Yaak requests")
+PY
+  if command -v uwsm-app >/dev/null 2>&1; then
+    uwsm-app -- yaak-app >/dev/null 2>&1 &
+  else
+    yaak-app >/dev/null 2>&1 &
+  fi
+  say "Yaak requests are imported from ~/Dropbox/Vault/yaak."
   say "Private environments stay out of that folder until you mark them sharable."
 }
 
@@ -1431,6 +1599,7 @@ restore_bookmarks
 say "Caching bookmark favicons."
 cache_bookmark_favicons || say "bookmark favicons could not be cached"
 say "4. Vault sync"
+install_repo_pkgs python-secretstorage python-yaml
 install_vault_sync
 "$HOME/.local/bin/vault-sync" reconcile
 if command -v systemctl >/dev/null 2>&1; then
@@ -1456,6 +1625,10 @@ install_work_apps
 set_qbittorrent_save_path
 set_obsidian_notes
 set_yaak_directory_sync
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl --user restart vault-sync.service || true
+fi
+"$HOME/.local/bin/vault-sync" reconcile || say "TablePlus sync did not finish."
 
 say ""
 say "Still to do by hand:"

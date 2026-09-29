@@ -360,8 +360,31 @@ def write_tableplus_keyring(records):
     os.replace(tmp, TABLEPLUS_KEYRING)
 
 
-def sync_tableplus(direction="reconcile"):
+def tableplus_connection_score(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return 0
+    objects = payload.get("objects") if isinstance(payload, dict) else None
+    if not isinstance(objects, list):
+        return 0
+    return sum(1 for item in objects if isinstance(item, dict) and item.get("db-driver"))
+
+
+def sync_tableplus_settings(direction):
+    local, vault = TABLEPLUS_SETTINGS[0][0], TABLEPLUS_SETTINGS[0][1]
+    local_score = tableplus_connection_score(local)
+    vault_score = tableplus_connection_score(vault)
+    if vault_score > local_score and direction != "push":
+        copy_file(vault, local, "text")
+    elif local_score > vault_score and direction != "pull":
+        copy_file(local, vault, "text")
     sync_group(TABLEPLUS_SETTINGS, direction)
+
+
+def sync_tableplus(direction="reconcile"):
+    sync_tableplus_settings(direction)
     try:
         collection = tableplus_collection()
         local = tableplus_local_items(collection)
@@ -390,11 +413,15 @@ def sync_tableplus(direction="reconcile"):
             vault[key] = here
             changed = True
             continue
-        if there is None or direction == "push":
+        if there is None or direction == "push" or not there.get("secret_b64"):
             continue
         secret = base64.b64decode(there["secret_b64"])
         attributes = {str(name): str(value) for name, value in there.get("attributes", {}).items()}
-        collection.create_item(there["label"], attributes, secret, replace=True)
+        try:
+            collection.create_item(there["label"], attributes, secret, replace=True)
+        except Exception as exc:
+            say(f"could not restore a TablePlus password: {exc}")
+            continue
         imported += 1
         vault[key] = there
     if changed and direction != "pull":

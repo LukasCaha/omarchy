@@ -16,7 +16,7 @@ The script asks for your password when it writes the Chromium extension policy a
 
 ### Keyboard
 
-Czech QWERTZ is applied before any later password prompt, and saved in `~/.config/hypr/input.lua`. Scroll follows the wheel, for the mouse and the touchpad: down moves the page down. Hyprland is reloaded so that takes effect in the current session.
+Czech QWERTZ is applied before any later password prompt, and saved in `~/.config/hypr/input.lua`. The mouse follows the wheel: down moves the page down. Touchpad scroll is reversed, so the content follows the fingers. Hyprland is reloaded so that takes effect in the current session. A re-run updates a touchpad that was previously set to follow the wheel.
 
 ### Dropbox
 
@@ -104,7 +104,7 @@ Obsidian opens the Notes vault at `~/Dropbox/Notes`. The notes themselves come f
 
 TablePlus connections and their keyring passwords sync through `~/Dropbox/Vault/tableplus` while `vault-sync` is running. The password file stays in the Vault. It is not part of this repository.
 
-Yaak directory sync uses `~/Dropbox/Vault/yaak`. On a machine that already has requests and an empty sync folder, the script sets that path and Yaak writes one YAML file per request. On a new machine the script waits until those files have synced. Yaak will not import them into a blank workspace on its own: in Yaak, use the workspace menu, **Open Folder**, and choose `~/Dropbox/Vault/yaak`. Environments stay out of the folder until you mark them sharable.
+Yaak directory sync uses `~/Dropbox/Vault/yaak`. On a machine that already has requests and an empty sync folder, the script sets that path and Yaak writes one YAML file per request. On a new machine the script waits for those files, imports them into Yaak, and keeps the workspace pointed at that folder. Environments stay out of the folder until you mark them sharable.
 
 ## What you still do by hand
 
@@ -115,7 +115,7 @@ The script prints this list when it finishes:
 3. In the extension, under **Account security**, turn on **Share unlock with Desktop**. If that line is missing, use **Unlock with biometrics**.
 4. In the extension, set timeout to Never and timeout action to Lock, if those controls are still shown.
 5. If no tray icons were open yet, right-click the `<` on the bar and pin each one.
-6. In Yaak, if the requests are not already open: workspace menu, **Open Folder**, `~/Dropbox/Vault/yaak`.
+6. In a terminal, `agent` is `~/.local/bin/agent`. Sign in once if the CLI asks.
 
 Put the SSH private keys into Bitwarden as SSH keys before expecting `ssh` to work. Sign in to Dropbox from the tray, and to the Bitwarden desktop app, the first time.
 
