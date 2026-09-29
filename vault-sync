@@ -395,6 +395,27 @@ def sync_tableplus_settings(direction):
     sync_group(TABLEPLUS_SETTINGS, direction)
 
 
+CURSOR_SKILLS = (
+    (
+        os.path.join(HOME, ".cursor/skills/dr/SKILL.md"),
+        os.path.join(HOME, "Dropbox/Vault/cursor/skills/dr/SKILL.md"),
+        "text",
+        (),
+    ),
+    (
+        os.path.join(HOME, ".cursor/skills/save/SKILL.md"),
+        os.path.join(HOME, "Dropbox/Vault/cursor/skills/save/SKILL.md"),
+        "text",
+        (),
+    ),
+)
+
+
+def sync_machine_state(direction="reconcile"):
+    sync_tableplus(direction)
+    sync_group(CURSOR_SKILLS, direction)
+
+
 def sync_tableplus(direction="reconcile"):
     sync_tableplus_settings(direction)
     try:
@@ -449,13 +470,13 @@ def watch_chromium():
     while True:
         now = time.time()
         if now >= next_tableplus:
-            sync_tableplus("reconcile")
+            sync_machine_state("reconcile")
             next_tableplus = now + 30
         if chromium_running():
             while chromium_running():
                 now = time.time()
                 if now >= next_tableplus:
-                    sync_tableplus("reconcile")
+                    sync_machine_state("reconcile")
                     next_tableplus = now + 30
                 time.sleep(2)
             time.sleep(1)
@@ -489,7 +510,7 @@ def main(argv):
         return
     sync_group(selected, command)
     if target == "all":
-        sync_tableplus(command)
+        sync_machine_state(command)
 
 
 if __name__ == "__main__":

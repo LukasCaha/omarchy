@@ -602,7 +602,7 @@ install_aur_pkgs() {
 
 install_work_apps() {
   # Official repositories. omarchy-pkg-add only calls pacman.
-  install_repo_pkgs aws-cli vlc gimp qbittorrent obsidian python-secretstorage python-yaml
+  install_repo_pkgs aws-cli github-cli vlc gimp qbittorrent obsidian python-secretstorage python-yaml
   if ! pkg_present yaak; then
     if pacman -Si yaak &>/dev/null; then
       omarchy-pkg-add yaak
@@ -1698,3 +1698,4 @@ say "1. In the Bitwarden app: Settings, Unlock with system authentication. The s
 say "2. In the Chromium Bitwarden extension: sign in once, to the same EU account."
 say "3. Extension Settings, Account security: Share unlock with Desktop. If that line is missing, Unlock with biometrics."
 say "4. In the extension, Timeout Never and Timeout action Lock, if those controls are still shown and not managed by the desktop app."
+say "5. In a terminal: gh auth login"

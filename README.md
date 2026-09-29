@@ -118,6 +118,7 @@ The script prints this list when it finishes:
 4. In the extension, set timeout to Never and timeout action to Lock, if those controls are still shown.
 5. If no tray icons were open yet, right-click the `<` on the bar and pin each one.
 6. In a terminal, `agent` is `~/.local/bin/agent`. Sign in once if the CLI asks.
+7. In a terminal: `gh auth login`.
 
 Put the SSH private keys into Bitwarden as SSH keys before expecting `ssh` to work. Sign in to Dropbox from the tray, and to the Bitwarden desktop app, the first time.
 
@@ -143,9 +144,9 @@ Not in the script yet. Packages can be installed by the script. Repos, `.env` fi
 - **Laravel `.env` files.** They sit inside the project directories (about 17 of them), and `~/Spaces` only symlinks those directories. Copying the repos without the `.env` files leaves the apps unable to boot. Do not commit them here.
 - **Spaces.** Clone `~/Spaces`, build `bin/w`, link it to `~/.local/bin/w`, and keep `workspaces.yaml`. The hubs point at `~/Projects`, so this waits on the repos being there.
 - **Herdr.** Install the `herdr` binary to `~/.local/bin/herdr` and copy `~/.config/herdr` (Catppuccin Latte theme).
-- **Cursor skills `/dr` and `/save`.** Copy `~/.cursor/skills/dr` and `~/.cursor/skills/save`. `/dr` opens a PlanetScale deploy request from pending Laravel migrations and does not merge it. `/save` writes a short English commit subject. Do not commit these skills to this public repository.
+- **Cursor skills `/dr` and `/save`.** Done. `vault-sync` copies `~/.cursor/skills/dr` and `~/.cursor/skills/save` to `~/Dropbox/Vault/cursor/skills`. Do not commit that folder.
 - **GitHub login.** Name and email are already written by the Omarchy installer. Push and pull on this machine go through `gh`, and that token sits in the login keyring, so it does not come across. On the new machine, install `github-cli` and run `gh auth login` once. That sets the credential helper too.
-- **AWS credentials.** SAM CLI is installed. `~/.aws` is not copied.
+- **AWS credentials.** The AWS CLI and SAM CLI are installed. `~/.aws` is not copied. Test the default profile with `aws sts get-caller-identity`. If the login has expired, run `aws login`. The separate `cursor` profile is `aws sts get-caller-identity --profile cursor`.
 - **TablePlus.** Done. `vault-sync` copies connection settings and keyring passwords to `~/Dropbox/Vault/tableplus` about every 30 seconds. Do not commit that folder.
 - **Yaak environments.** Requests sync through `~/Dropbox/Vault/yaak`. Environment variables stay on this machine until each environment is marked sharable in Yaak. Do not commit that folder.
 
