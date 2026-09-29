@@ -622,14 +622,10 @@ install_tableplus() {
     say "TablePlus is already installed."
     return 0
   fi
-  install_aur_pkgs tableplus
-  if pkg_present tableplus; then
-    return 0
-  fi
-  # TablePlus only publishes a .deb. The AUR package is that deb, built with
-  # makepkg. Its PKGBUILD pins a deb TablePlus has already removed, so the
-  # build 404s. Point the same PKGBUILD at the deb that is still online.
-  say "The AUR TablePlus package points at a removed deb. Building it with the current one."
+  # The AUR PKGBUILD downloads tableplus_0.1.314_amd64.deb. TablePlus has
+  # removed that file, so yay stops at 404. Build the same package with the
+  # deb that is still in the pool.
+  say "Building TablePlus from the AUR package against the current deb."
   install_repo_pkgs gtksourceview3 libgee gnome-keyring base-devel
   local pool suffix sumline page deb ver url work sum
   case "$(uname -m)" in
@@ -658,20 +654,26 @@ install_tableplus() {
   curl -fsSL -o "$work/tableplus.deb" "$url"
   sum=$(sha256sum "$work/tableplus.deb" | awk '{print $1}')
   rm -f "$work/tableplus.deb"
-  python3 - "$work/tableplus/PKGBUILD" "$ver" "$sumline" "$sum" <<'PY'
+  python3 - "$work/tableplus/PKGBUILD" "$ver" "$suffix" "$sumline" "$sum" "$url" <<'PY'
 import pathlib, sys
-path, ver, sumline, digest = sys.argv[1:]
+path, ver, suffix, sumline, digest, url = sys.argv[1:]
 lines = pathlib.Path(path).read_text().splitlines()
 out = []
 for line in lines:
     if line.startswith("pkgver="):
         line = f"pkgver={ver}"
+    elif line.startswith(f"source_{'aarch64' if suffix == 'arm64' else 'x86_64'}="):
+        line = f"source_{'aarch64' if suffix == 'arm64' else 'x86_64'}=(\"{url}\")"
     elif line.startswith(f"{sumline}="):
         line = f"{sumline}=('{digest}')"
     out.append(line)
 pathlib.Path(path).write_text("\n".join(out) + "\n")
 PY
-  (cd "$work/tableplus" && makepkg -si --noconfirm)
+  if ! (cd "$work/tableplus" && makepkg -si --noconfirm); then
+    rm -rf "$work"
+    say "TablePlus did not build."
+    return 0
+  fi
   rm -rf "$work"
   say "TablePlus is installed from the AUR package, using ${deb}."
 }
