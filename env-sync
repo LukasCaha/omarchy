@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""Copy gitignored project files into Dropbox and back.
+
+env-push saves the current repo, or every repo in ~/Projects.
+env-pull restores the saved files for the repo you are in.
+The Vault folder name is the project folder name.
+"""
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+HOME = Path.home()
+PROJECTS = HOME / "Projects"
+VAULT = HOME / "Dropbox/Vault/projects"
+
+SKIP_DIRS = {
+    "node_modules",
+    "vendor",
+    ".git",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    "coverage",
+    ".cache",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "target",
+    ".parcel-cache",
+}
+SKIP_PREFIXES = (
+    "bootstrap/cache/",
+    "storage/logs/",
+    "storage/framework/",
+    "storage/debugbar/",
+    "storage/phpstan/",
+    "storage/pail/",
+    "nativephp/",
+)
+KEY_SUFFIXES = (
+    ".sqlite",
+    ".sqlite3",
+    ".db",
+    ".jks",
+    ".p12",
+    ".p8",
+    ".cer",
+    ".csr",
+    ".mobileprovision",
+    ".key",
+)
+MEDIA_SUFFIXES = (".mp4", ".wav", ".mov")
+PRIVATE_SUFFIXES = (".env", ".key", ".p12", ".p8", ".jks", ".pem", ".cer", ".csr", ".mobileprovision", ".sqlite", ".sqlite3", ".db")
+
+
+def say(text):
+    print(f"env-sync: {text}", file=sys.stderr)
+
+
+def project_root(start):
+    current = Path(start).resolve()
+    for candidate in [current, *current.parents]:
+        if (candidate / ".git").is_dir() and candidate.parent == PROJECTS:
+            return candidate
+    return None
+
+
+def ignored_files(repo):
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "--others", "-i", "--exclude-standard", "-z"],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        return []
+    found = []
+    for raw in proc.stdout.split(b"\0"):
+        if not raw:
+            continue
+        rel = raw.decode()
+        path = repo / rel
+        if path.is_file():
+            found.append(rel)
+    return found
+
+
+def keep(rel):
+    parts = rel.split("/")
+    if any(part in SKIP_DIRS for part in parts):
+        return False
+    if rel.startswith(SKIP_PREFIXES) or "/livewire-tmp/" in rel:
+        return False
+    if rel.endswith(".log") or rel.endswith(".phpunit.result.cache"):
+        return False
+    name = parts[-1]
+    low = name.lower()
+    if low == "cacert.pem":
+        return False
+    if ".env" in low and not low.endswith(".example"):
+        return True
+    if "credentials" in parts or low == "auth.json":
+        return True
+    if low.endswith(KEY_SUFFIXES):
+        return True
+    if low.endswith(".pem") and "credential" in rel.lower():
+        return True
+    if rel.startswith("storage/app/"):
+        return True
+    if low.endswith(MEDIA_SUFFIXES):
+        return True
+    if parts[0] in {"stills", "v2", "assets"}:
+        return True
+    return False
+
+
+def selected(repo):
+    return [rel for rel in ignored_files(repo) if keep(rel)]
+
+
+def private(rel):
+    low = rel.lower()
+    name = Path(rel).name.lower()
+    return (
+        ".env" in name
+        or name == "auth.json"
+        or "/credentials/" in f"/{low}"
+        or low.endswith(PRIVATE_SUFFIXES)
+    )
+
+
+def copy_file(src, dst, rel):
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(dst.name + ".partial")
+    shutil.copyfile(src, tmp)
+    os.chmod(tmp, 0o600 if private(rel) else 0o644)
+    os.replace(tmp, dst)
+
+
+def push_repo(repo):
+    files = selected(repo)
+    dest_root = VAULT / repo.name
+    if not files:
+        say(f"{repo.name}: nothing to save")
+        return 0
+    dest_root.mkdir(parents=True, exist_ok=True)
+    os.chmod(dest_root, 0o700)
+    total = 0
+    for rel in files:
+        src = repo / rel
+        copy_file(src, dest_root / rel, rel)
+        total += src.stat().st_size
+    say(f"{repo.name}: saved {len(files)} files ({total / 1024 / 1024:.1f} MB)")
+    return len(files)
+
+
+def pull_repo(repo):
+    src_root = VAULT / repo.name
+    if not src_root.is_dir():
+        say(f"No saved files for {repo.name}")
+        return 1
+    files = [path.relative_to(src_root).as_posix() for path in src_root.rglob("*") if path.is_file()]
+    if not files:
+        say(f"No saved files for {repo.name}")
+        return 1
+    for rel in files:
+        copy_file(src_root / rel, repo / rel, rel)
+    say(f"{repo.name}: restored {len(files)} files")
+    return 0
+
+
+def repos_to_push(argv):
+    if "--all" in argv:
+        return sorted(path for path in PROJECTS.iterdir() if (path / ".git").is_dir())
+    current = project_root(Path.cwd())
+    if current:
+        return [current]
+    return sorted(path for path in PROJECTS.iterdir() if (path / ".git").is_dir())
+
+
+def main(argv):
+    action = Path(argv[0]).name
+    args = argv[1:]
+    if action == "env-sync":
+        if not args:
+            say("use env-push or env-pull")
+            return 2
+        action = args[0]
+        args = args[1:]
+    VAULT.mkdir(parents=True, exist_ok=True)
+    os.chmod(VAULT, 0o700)
+    if action == "env-push":
+        count = 0
+        for repo in repos_to_push(args):
+            count += push_repo(repo)
+        say(f"saved {count} files into {VAULT}")
+        return 0
+    if action == "env-pull":
+        repo = project_root(Path.cwd())
+        if not repo:
+            say("Run this inside a repo under ~/Projects")
+            return 1
+        return pull_repo(repo)
+    say("use env-push or env-pull")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

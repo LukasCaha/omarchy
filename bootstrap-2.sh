@@ -1684,6 +1684,28 @@ install_ssh() {
   fi
 }
 
+install_env_sync() {
+  local dir src fetched
+  src=""
+  fetched=""
+  if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+    dir=$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    if [[ -f "$dir/env-sync" ]]; then
+      src="$dir/env-sync"
+    fi
+  fi
+  if [[ -z "$src" ]]; then
+    fetched=$(mktemp)
+    src="$fetched"
+    curl -fsSL "https://raw.githubusercontent.com/LukasCaha/omarchy/main/env-sync" -o "$src"
+  fi
+  mkdir -p "$HOME/.local/bin"
+  install -m 0755 "$src" "$HOME/.local/bin/env-sync"
+  ln -sfn env-sync "$HOME/.local/bin/env-pull"
+  ln -sfn env-sync "$HOME/.local/bin/env-push"
+  [[ -n "$fetched" ]] && rm -f "$fetched"
+}
+
 install_vault_sync() {
   local dir src unit fetched
   src=""
@@ -1703,6 +1725,7 @@ install_vault_sync() {
   mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/Dropbox/Vault/shell"
   install -m 0755 "$src" "$HOME/.local/bin/vault-sync"
   [[ -n "$fetched" ]] && rm -f "$fetched"
+  install_env_sync
   if [[ ! -f "$HOME/.bashrc" ]]; then
     if [[ -f "$HOME/.local/share/omarchy/default/bashrc" ]]; then
       cp "$HOME/.local/share/omarchy/default/bashrc" "$HOME/.bashrc"

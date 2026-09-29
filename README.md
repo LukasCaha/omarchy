@@ -142,7 +142,7 @@ Put the SSH private keys into Bitwarden as SSH keys before expecting `ssh` to wo
 Not in the script yet. Packages can be installed by the script. Repos, `.env` files, and app databases with passwords stay off this public repository and have to be copied by hand.
 
 - **Projects.** `~/Projects` is the big one. The Youklid repos live only on this disk. The new machine needs those clones, including anything not pushed.
-- **Laravel `.env` files.** They sit inside the project directories (about 17 of them), and `~/Spaces` only symlinks those directories. Copying the repos without the `.env` files leaves the apps unable to boot. Do not commit them here.
+- **Laravel `.env` files and local project data.** Done. `env-push` copies gitignored env files, `credentials/`, local databases, and `storage/app` to `~/Dropbox/Vault/projects/<folder>`. On the new machine, `cd` into the cloned repo and run `env-pull`. Do not commit that folder.
 - **Spaces.** Clone `~/Spaces`, build `bin/w`, link it to `~/.local/bin/w`, and keep `workspaces.yaml`. The hubs point at `~/Projects`, so this waits on the repos being there.
 - **Herdr.** Install the `herdr` binary to `~/.local/bin/herdr` and copy `~/.config/herdr`. `config.toml` is only the Catppuccin Latte theme. `session.json` is the seven workspaces under `~/Projects`, so this waits on those repos.
 - **Local domains.** `~/.config/domains/sites` and the `domains` command sync through `~/Dropbox/Vault/domains`. The script writes those names into `/etc/hosts` and points `*.test` at `127.0.0.1` with dnsmasq. Port 8000 is just where the app listens.
