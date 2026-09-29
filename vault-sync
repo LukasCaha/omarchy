@@ -200,8 +200,12 @@ def copy_file(src, dst, kind):
             os.remove(tmp)
         say(f"could not copy {os.path.basename(src)}: {exc}")
         return False
-    private = kind in ("history", "shortcuts", "lines", "bytes")
-    os.chmod(tmp, 0o600 if private else 0o644)
+    if kind == "script":
+        os.chmod(tmp, 0o755)
+    elif kind in ("history", "shortcuts", "lines", "bytes"):
+        os.chmod(tmp, 0o600)
+    else:
+        os.chmod(tmp, 0o644)
     os.replace(tmp, dst)
     if kind in ("history", "shortcuts"):
         for suffix in ("-wal", "-shm", "-journal"):
@@ -411,9 +415,26 @@ CURSOR_SKILLS = (
 )
 
 
+DOMAIN_FILES = (
+    (
+        os.path.join(HOME, ".config/domains/sites"),
+        os.path.join(HOME, "Dropbox/Vault/domains/sites"),
+        "text",
+        (),
+    ),
+    (
+        os.path.join(HOME, ".local/bin/domains"),
+        os.path.join(HOME, "Dropbox/Vault/domains/domains"),
+        "script",
+        (),
+    ),
+)
+
+
 def sync_machine_state(direction="reconcile"):
     sync_tableplus(direction)
     sync_group(CURSOR_SKILLS, direction)
+    sync_group(DOMAIN_FILES, direction)
 
 
 def sync_tableplus(direction="reconcile"):

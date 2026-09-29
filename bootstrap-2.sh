@@ -678,6 +678,163 @@ PY
   say "TablePlus is installed from the AUR package, using ${deb}."
 }
 
+apply_local_domains() {
+  local sites="$HOME/.config/domains/sites"
+  if [[ ! -f "$sites" ]]; then
+    say "No domain list at ~/.config/domains/sites yet."
+    return 0
+  fi
+  install_repo_pkgs dnsmasq gum
+  python3 - "$sites" <<'PY'
+import pathlib, sys
+sites = pathlib.Path(sys.argv[1]).read_text().splitlines()
+rows = []
+for line in sites:
+    if not line.strip() or line.startswith("#"):
+        continue
+    parts = line.split("\t")
+    if len(parts) < 2:
+        continue
+    name, ip = parts[0].strip(), parts[1].strip()
+    if name and ip:
+        rows.append(f"{ip}  {name}")
+hosts = pathlib.Path("/etc/hosts")
+text = hosts.read_text() if hosts.exists() else ""
+begin, end = "# BEGIN domains", "# END domains"
+block = begin + "\n" + "\n".join(rows) + "\n" + end + "\n"
+if begin in text and end in text:
+    pre, rest = text.split(begin, 1)
+    _, post = rest.split(end, 1)
+    text = pre.rstrip() + "\n\n" + block + post.lstrip("\n")
+else:
+    if text and not text.endswith("\n"):
+        text += "\n"
+    text = text.rstrip() + "\n\n" + block
+tmp = pathlib.Path("/tmp/bootstrap-hosts")
+tmp.write_text(text)
+PY
+  sudo cp /tmp/bootstrap-hosts /etc/hosts
+  sudo chmod 644 /etc/hosts
+  rm -f /tmp/bootstrap-hosts
+  local conf="/etc/dnsmasq.conf"
+  if [[ -f "$conf" ]] && ! grep -q '^address=/\.test/127\.0\.0\.1$' "$conf"; then
+    printf '\naddress=/.test/127.0.0.1\n' | sudo tee -a "$conf" >/dev/null
+  fi
+  if [[ -f "$conf" ]] && ! grep -q '^listen-address=127\.0\.0\.1$' "$conf"; then
+    printf 'listen-address=127.0.0.1\n' | sudo tee -a "$conf" >/dev/null
+  fi
+  if [[ -f "$conf" ]] && ! grep -q '^server=1\.1\.1\.1$' "$conf"; then
+    printf 'server=8.8.8.8\nserver=1.1.1.1\n' | sudo tee -a "$conf" >/dev/null
+  fi
+  if [[ ! -f /etc/resolv.conf ]] || ! grep -q '^nameserver 127\.0\.0\.1$' /etc/resolv.conf; then
+    printf 'nameserver 127.0.0.1\n' | sudo tee /etc/resolv.conf >/dev/null
+  fi
+  sudo systemctl enable --now dnsmasq >/dev/null 2>&1 || true
+  sudo systemctl reload dnsmasq >/dev/null 2>&1 || sudo systemctl restart dnsmasq >/dev/null 2>&1 || true
+  say "Local domains from ~/.config/domains/sites are in /etc/hosts. *.test points at 127.0.0.1."
+}
+
+sync_wifi_credentials() {
+  local vault="$HOME/Dropbox/Vault/wifi"
+  local src="/etc/NetworkManager/system-connections"
+  local iwd="/var/lib/iwd"
+  local f base
+  mkdir -p "$vault/iwd" || sudo mkdir -p "$vault/iwd"
+  chmod 700 "$vault" 2>/dev/null || true
+  if ! sudo -v; then
+    say "Wi-Fi passwords were not copied. sudo is required."
+    return 0
+  fi
+  if [[ -d "$src" ]]; then
+    shopt -s nullglob
+    for f in "$src"/*; do
+      if sudo grep -q '^type=wifi$' "$f"; then
+        base="$(basename "$f")"
+        sudo cp -a "$f" "$vault/$base"
+        sudo chown "$USER:$USER" "$vault/$base"
+        chmod 600 "$vault/$base"
+      fi
+    done
+    shopt -u nullglob
+  fi
+  sudo python3 - "$iwd" "$vault" <<'PY'
+import os, pathlib, re, shutil, sys, uuid
+iwd, vault = map(pathlib.Path, sys.argv[1:])
+store = vault / "iwd"
+store.mkdir(parents=True, exist_ok=True)
+if not iwd.is_dir():
+    sys.exit(0)
+for src in iwd.glob("*.psk"):
+    dst = store / src.name
+    shutil.copyfile(src, dst)
+    os.chown(dst, os.getuid(), os.getgid())
+    os.chmod(dst, 0o600)
+    text = src.read_text(errors="replace")
+    phrase = re.search(r"^Passphrase=(.*)$", text, re.M)
+    key = re.search(r"^PreSharedKey=([0-9a-fA-F]{64})$", text, re.M)
+    secret = phrase.group(1) if phrase else (key.group(1) if key else "")
+    if not secret:
+        continue
+    raw = src.name[:-4]
+    ssid = bytes.fromhex(raw[1:]).decode("utf-8", "replace") if raw.startswith("=") else raw
+    out = vault / (ssid + ".nmconnection")
+    if out.exists() and "psk=" in out.read_text(errors="replace"):
+        existing = out.read_text(errors="replace")
+        current = re.search(r"^psk=(.*)$", existing, re.M)
+        if current and not re.fullmatch(r"[0-9a-fA-F]{64}", current.group(1)):
+            continue
+    profile = "\n".join([
+        "[connection]",
+        f"id={ssid}",
+        f"uuid={uuid.uuid5(uuid.NAMESPACE_DNS, 'wifi:' + ssid)}",
+        "type=wifi",
+        "",
+        "[wifi]",
+        "mode=infrastructure",
+        f"ssid={ssid}",
+        "",
+        "[wifi-security]",
+        "auth-alg=open",
+        "key-mgmt=wpa-psk",
+        f"psk={secret}",
+        "",
+        "[ipv4]",
+        "method=auto",
+        "",
+        "[ipv6]",
+        "addr-gen-mode=default",
+        "method=auto",
+        "",
+    ])
+    out.write_text(profile)
+    os.chown(out, os.getuid(), os.getgid())
+    os.chmod(out, 0o600)
+PY
+  sudo chown -R "$USER:$USER" "$vault"
+  chmod 700 "$vault" "$vault/iwd"
+  chmod 600 "$vault"/*.nmconnection "$vault/iwd"/*.psk 2>/dev/null || true
+  shopt -s nullglob
+  for f in "$vault"/*.nmconnection; do
+    base="$(basename "$f")"
+    if [[ ! -e "$src/$base" ]]; then
+      sudo install -m 600 -o root -g root "$f" "$src/$base"
+    fi
+  done
+  if [[ -d "$iwd" ]]; then
+    for f in "$vault/iwd"/*.psk; do
+      base="$(basename "$f")"
+      if [[ ! -e "$iwd/$base" ]]; then
+        sudo install -m 600 -o root -g root "$f" "$iwd/$base"
+      fi
+    done
+  fi
+  shopt -u nullglob
+  if systemctl is-active NetworkManager >/dev/null 2>&1; then
+    nmcli connection reload >/dev/null 2>&1 || true
+  fi
+  say "Wi-Fi passwords are in ~/Dropbox/Vault/wifi."
+}
+
 install_cursor_agent() {
   if [[ -x "$HOME/.local/bin/agent" ]]; then
     say "Cursor agent CLI is already installed."
@@ -1691,6 +1848,8 @@ if command -v systemctl >/dev/null 2>&1; then
   systemctl --user restart vault-sync.service || true
 fi
 "$HOME/.local/bin/vault-sync" reconcile || say "TablePlus sync did not finish."
+apply_local_domains
+sync_wifi_credentials
 
 say ""
 say "Still to do by hand:"
