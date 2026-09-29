@@ -820,17 +820,47 @@ PY
       sudo install -m 600 -o root -g root "$f" "$src/$base"
     fi
   done
-  if [[ -d "$iwd" ]]; then
-    for f in "$vault/iwd"/*.psk; do
-      base="$(basename "$f")"
-      if [[ ! -e "$iwd/$base" ]]; then
-        sudo install -m 600 -o root -g root "$f" "$iwd/$base"
-      fi
-    done
-  fi
   shopt -u nullglob
+  sudo mkdir -p "$iwd"
+  sudo python3 - "$vault" "$iwd" <<'PY'
+import pathlib, re, sys
+vault, iwd = map(pathlib.Path, sys.argv[1:])
+
+def iwd_filename(ssid):
+    if re.fullmatch(r"[A-Za-z0-9 _-]+", ssid):
+        return ssid + ".psk"
+    return "=" + ssid.encode().hex() + ".psk"
+
+def escape(value):
+    value = value.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    if value.startswith(" "):
+        value = "\\s" + value[1:]
+    return value
+
+written = 0
+for src in vault.glob("*.nmconnection"):
+    text = src.read_text(errors="replace")
+    ssid = re.search(r"^ssid=(.*)$", text, re.M)
+    secret = re.search(r"^psk=(.*)$", text, re.M)
+    if not ssid or not secret or not secret.group(1):
+        continue
+    dest = iwd / iwd_filename(ssid.group(1))
+    if dest.exists():
+        continue
+    if re.fullmatch(r"[0-9a-fA-F]{64}", secret.group(1)):
+        body = "[Security]\nPreSharedKey=" + secret.group(1) + "\n"
+    else:
+        body = "[Security]\nPassphrase=" + escape(secret.group(1)) + "\n"
+    dest.write_text(body)
+    dest.chmod(0o600)
+    written += 1
+print(f"installed {written}")
+PY
   if systemctl is-active NetworkManager >/dev/null 2>&1; then
     nmcli connection reload >/dev/null 2>&1 || true
+  fi
+  if systemctl is-enabled iwd >/dev/null 2>&1 || systemctl is-active iwd >/dev/null 2>&1; then
+    sudo systemctl restart iwd >/dev/null 2>&1 || true
   fi
   say "Wi-Fi passwords are in ~/Dropbox/Vault/wifi."
 }
