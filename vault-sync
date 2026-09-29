@@ -281,6 +281,18 @@ TABLEPLUS_SETTINGS = (
         "text",
         (),
     ),
+    (
+        os.path.join(HOME, ".tableplus/.tblicensenix"),
+        os.path.join(VAULT_TABLEPLUS, "tblicensenix"),
+        "bytes",
+        (),
+    ),
+    (
+        os.path.join(HOME, ".tableplus/.tbid"),
+        os.path.join(VAULT_TABLEPLUS, "tbid"),
+        "bytes",
+        (),
+    ),
 )
 
 

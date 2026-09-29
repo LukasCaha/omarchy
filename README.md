@@ -104,7 +104,7 @@ qBittorrent's default save path is `~/Torrents`. The script creates that folder.
 
 Obsidian opens the Notes vault at `~/Dropbox/Notes`. The notes themselves come from Dropbox. The script waits until that folder has synced, registers it as the open vault, and starts Obsidian on the shelf at login. Super+S still toggles the shelf.
 
-TablePlus connections and their keyring passwords sync through `~/Dropbox/Vault/tableplus` while `vault-sync` is running. The password file stays in the Vault. It is not part of this repository.
+TablePlus connections, keyring passwords, and the license sync through `~/Dropbox/Vault/tableplus` while `vault-sync` is running. The license is `~/.tableplus/.tblicensenix`, together with `~/.tableplus/.tbid`. Those files stay in the Vault. They are not part of this repository. On the new machine, `vault-sync` copies them back before TablePlus is opened.
 
 Yaak directory sync uses `~/Dropbox/Vault/yaak`. On a machine that already has requests and an empty sync folder, the script sets that path and Yaak writes one YAML file per request. On a new machine the script waits for those files, imports them into Yaak, and keeps the workspace pointed at that folder. Environments stay out of the folder until you mark them sharable.
 
