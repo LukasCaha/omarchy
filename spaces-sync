@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Merge Spaces folders and their symlinks through Dropbox.
+
+spaces-push reads ~/Spaces/<space> and, until that exists, ~/Spaces/hubs/<space>.
+spaces-pull writes ~/Spaces/<space>, with no hubs directory.
+Symlinks are stored as text files so Dropbox does not upload the projects they point at.
+Push and pull only add or update. Neither deletes the other side.
+"""
+
+import os
+import sys
+from pathlib import Path
+
+HOME = Path.home()
+SPACES = HOME / "Spaces"
+VAULT = HOME / "Dropbox/Vault/spaces"
+SKIP_ROOT = {".git", "hubs", "bin", "cmd", "internal", ".cursor"}
+LINK_SUFFIX = ".symlink"
+
+
+def say(text):
+    print(f"spaces-sync: {text}", file=sys.stderr)
+
+
+def store_target(target):
+    home = str(HOME)
+    if target == home:
+        return "~"
+    if target.startswith(home + "/"):
+        return "~/" + target[len(home) + 1 :]
+    return target
+
+
+def restore_target(stored):
+    if stored == "~":
+        return str(HOME)
+    if stored.startswith("~/"):
+        return str(HOME / stored[2:])
+    return stored
+
+
+def space_sources():
+    found = {}
+    hubs = SPACES / "hubs"
+    if hubs.is_dir():
+        for child in sorted(hubs.iterdir()):
+            if child.is_dir() and not child.is_symlink():
+                found[child.name] = child
+    if SPACES.is_dir():
+        for child in sorted(SPACES.iterdir()):
+            if child.name in SKIP_ROOT or child.name.startswith("."):
+                continue
+            if child.is_dir() and not child.is_symlink():
+                found[child.name] = child
+    return found
+
+
+def walk_space(root):
+    links = {}
+    files = {}
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        current = Path(dirpath)
+        for name in list(dirnames):
+            path = current / name
+            if path.is_symlink():
+                rel = path.relative_to(root).as_posix()
+                links[rel] = store_target(os.readlink(path))
+        dirnames[:] = [name for name in dirnames if not (current / name).is_symlink()]
+        for name in filenames:
+            path = current / name
+            if path.is_symlink():
+                rel = path.relative_to(root).as_posix()
+                links[rel] = store_target(os.readlink(path))
+            elif path.is_file():
+                rel = path.relative_to(root).as_posix()
+                files[rel] = path
+    return links, files
+
+
+def push():
+    VAULT.mkdir(parents=True, exist_ok=True)
+    os.chmod(VAULT, 0o700)
+    sources = space_sources()
+    if not sources:
+        say("No spaces found under ~/Spaces")
+        return 1
+    count = 0
+    for name, root in sources.items():
+        links, files = walk_space(root)
+        dest = VAULT / name
+        dest.mkdir(parents=True, exist_ok=True)
+        for rel, target in links.items():
+            out = dest / (rel + LINK_SUFFIX)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(target + "\n")
+            os.chmod(out, 0o600)
+            count += 1
+        for rel, src in files.items():
+            out = dest / rel
+            out.parent.mkdir(parents=True, exist_ok=True)
+            tmp = out.with_name(out.name + ".partial")
+            tmp.write_bytes(src.read_bytes())
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, out)
+            count += 1
+        say(f"{name}: saved {len(links)} symlinks, {len(files)} files")
+    say(f"saved {count} items into {VAULT}")
+    return 0
+
+
+def pull():
+    if not VAULT.is_dir():
+        say(f"No saved spaces in {VAULT}")
+        return 1
+    SPACES.mkdir(parents=True, exist_ok=True)
+    count = 0
+    for space in sorted(path for path in VAULT.iterdir() if path.is_dir()):
+        dest_root = SPACES / space.name
+        links = 0
+        files = 0
+        for src in space.rglob("*"):
+            if not src.is_file():
+                continue
+            rel = src.relative_to(space).as_posix()
+            if rel.endswith(LINK_SUFFIX):
+                link_rel = rel[: -len(LINK_SUFFIX)]
+                target = restore_target(src.read_text().strip())
+                link = dest_root / link_rel
+                link.parent.mkdir(parents=True, exist_ok=True)
+                if link.is_symlink() or not link.exists():
+                    if link.is_symlink() or link.exists():
+                        link.unlink()
+                    link.symlink_to(target)
+                    links += 1
+                else:
+                    say(f"{space.name}/{link_rel} exists and is not a symlink, left it")
+            else:
+                dest = dest_root / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dest.with_name(dest.name + ".partial")
+                tmp.write_bytes(src.read_bytes())
+                os.chmod(tmp, 0o644)
+                os.replace(tmp, dest)
+                files += 1
+        say(f"{space.name}: restored {links} symlinks, {files} files")
+        count += links + files
+    say(f"restored {count} items into {SPACES}")
+    return 0
+
+
+def main(argv):
+    action = Path(argv[0]).name
+    args = argv[1:]
+    if action == "spaces-sync":
+        if not args:
+            say("use spaces-push or spaces-pull")
+            return 2
+        action = args[0]
+    if action == "spaces-push":
+        return push()
+    if action == "spaces-pull":
+        return pull()
+    say("use spaces-push or spaces-pull")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

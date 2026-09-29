@@ -143,7 +143,7 @@ Not in the script yet. Packages can be installed by the script. Repos, `.env` fi
 
 - **Projects.** `~/Projects` is the big one. The Youklid repos live only on this disk. The new machine needs those clones, including anything not pushed.
 - **Laravel `.env` files and local project data.** Done. `env-push` copies gitignored env files, `credentials/`, local databases, and `storage/app` to `~/Dropbox/Vault/projects/<folder>`. On the new machine, `cd` into the cloned repo and run `env-pull`. Do not commit that folder.
-- **Spaces.** Clone `~/Spaces`, build `bin/w`, link it to `~/.local/bin/w`, and keep `workspaces.yaml`. The hubs point at `~/Projects`, so this waits on the repos being there.
+- **Spaces.** Done. `spaces-push` copies each space under `~/Spaces` (or `~/Spaces/hubs` until you flatten it) to `~/Dropbox/Vault/spaces`. Symlinks are stored as paths, not as the projects they point at. `spaces-pull` recreates `~/Spaces/<space>` and those symlinks. The `w` command is not copied.
 - **Herdr.** Install the `herdr` binary to `~/.local/bin/herdr` and copy `~/.config/herdr`. `config.toml` is only the Catppuccin Latte theme. `session.json` is the seven workspaces under `~/Projects`, so this waits on those repos.
 - **Local domains.** `~/.config/domains/sites` and the `domains` command sync through `~/Dropbox/Vault/domains`. The script writes those names into `/etc/hosts` and points `*.test` at `127.0.0.1` with dnsmasq. Port 8000 is just where the app listens.
 - **Wi-Fi.** Saved networks, including passwords, copy to `~/Dropbox/Vault/wifi`. The new machine installs them for iwd, which is the Wi-Fi menu. NetworkManager is disabled, so its profiles alone do not show up there. Do not commit that folder.

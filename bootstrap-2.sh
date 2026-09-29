@@ -1704,6 +1704,29 @@ install_env_sync() {
   ln -sfn env-sync "$HOME/.local/bin/env-pull"
   ln -sfn env-sync "$HOME/.local/bin/env-push"
   [[ -n "$fetched" ]] && rm -f "$fetched"
+  install_spaces_sync
+}
+
+install_spaces_sync() {
+  local dir src fetched
+  src=""
+  fetched=""
+  if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+    dir=$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    if [[ -f "$dir/spaces-sync" ]]; then
+      src="$dir/spaces-sync"
+    fi
+  fi
+  if [[ -z "$src" ]]; then
+    fetched=$(mktemp)
+    src="$fetched"
+    curl -fsSL "https://raw.githubusercontent.com/LukasCaha/omarchy/main/spaces-sync" -o "$src"
+  fi
+  mkdir -p "$HOME/.local/bin"
+  install -m 0755 "$src" "$HOME/.local/bin/spaces-sync"
+  ln -sfn spaces-sync "$HOME/.local/bin/spaces-pull"
+  ln -sfn spaces-sync "$HOME/.local/bin/spaces-push"
+  [[ -n "$fetched" ]] && rm -f "$fetched"
 }
 
 install_vault_sync() {
