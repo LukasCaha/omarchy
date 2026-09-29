@@ -658,9 +658,19 @@ install_aur_pkgs() {
   done
 }
 
+install_laravel() {
+  install_repo_pkgs php php-gd php-sqlite php-redis composer redis
+  sudo systemctl enable --now redis >/dev/null 2>&1 || say "Redis did not start."
+  if [[ ! -x "$HOME/.config/composer/vendor/bin/laravel" ]]; then
+    composer global require laravel/installer --no-interaction || say "The Laravel installer did not install."
+  fi
+  say "PHP, GD, Redis, and the Laravel installer are installed. Redis listens locally."
+}
+
 install_work_apps() {
   # Official repositories. omarchy-pkg-add only calls pacman.
   install_repo_pkgs aws-cli github-cli vlc gimp qbittorrent obsidian filezilla python-secretstorage python-yaml
+  install_laravel
   if ! pkg_present yaak; then
     if pacman -Si yaak &>/dev/null; then
       omarchy-pkg-add yaak
