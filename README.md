@@ -69,6 +69,8 @@ If one side is empty and the other has real content, the full copy wins, so a ne
 
 The synced `~/.bashrc` is what points `SSH_AUTH_SOCK` at the Bitwarden agent socket when that socket exists.
 
+The same service also copies TablePlus connection settings and keyring passwords to `~/Dropbox/Vault/tableplus` about every 30 seconds. A fresh machine receives them on the next `vault-sync` run.
+
 ### SSH
 
 Public SSH files move between `~/.ssh` and `~/Dropbox/Vault/ssh` when one side is missing. Private keys stay in Bitwarden. They have to be items of type SSH key. A secure note, or a fingerprint written in a note, is not something the agent can use.
@@ -90,11 +92,17 @@ Nautilus gets these sidebar bookmarks, each with an icon: Desktop, Projects, Dow
 
 ### Work apps
 
-Installs these if they are missing: AWS SAM CLI, Grok bot, Fastpotify, VLC, GIMP, TablePlus, Yaak, qBittorrent, and Obsidian.
+Installs these if they are missing. `omarchy-pkg-add` only uses pacman, so AUR packages go through `omarchy-pkg-aur-add`.
+
+From the repositories: AWS CLI, VLC, GIMP, qBittorrent, Obsidian, Yaak, and `python-secretstorage`. From the AUR: AWS SAM CLI (`aws-sam-cli-bin`), Grok bot (`grok-bot-bin`), Fastpotify (`fastpotify-bin`), and TablePlus. If Yaak is not in the repositories, the script installs `yaak-bin` instead.
+
+The Cursor agent CLI is installed with the official installer when `agent` is not already on `PATH`. That puts `agent` in `~/.local/bin`.
 
 qBittorrent's default save path is `~/Torrents`. The script creates that folder.
 
 Obsidian opens the Notes vault at `~/Dropbox/Notes`. The notes themselves come from Dropbox. The script waits until that folder has synced, registers it as the open vault, and starts Obsidian on the shelf at login. Super+S still toggles the shelf.
+
+TablePlus connections and their keyring passwords sync through `~/Dropbox/Vault/tableplus` while `vault-sync` is running. The password file stays in the Vault. It is not part of this repository.
 
 Yaak directory sync uses `~/Dropbox/Vault/yaak`. On a machine that already has requests and an empty sync folder, the script sets that path and Yaak writes one YAML file per request. On a new machine the script waits until those files have synced. Yaak will not import them into a blank workspace on its own: in Yaak, use the workspace menu, **Open Folder**, and choose `~/Dropbox/Vault/yaak`. Environments stay out of the folder until you mark them sharable.
 
@@ -133,9 +141,10 @@ Not in the script yet. Packages can be installed by the script. Repos, `.env` fi
 - **Laravel `.env` files.** They sit inside the project directories (about 17 of them), and `~/Spaces` only symlinks those directories. Copying the repos without the `.env` files leaves the apps unable to boot. Do not commit them here.
 - **Spaces.** Clone `~/Spaces`, build `bin/w`, link it to `~/.local/bin/w`, and keep `workspaces.yaml`. The hubs point at `~/Projects`, so this waits on the repos being there.
 - **Herdr.** Install the `herdr` binary to `~/.local/bin/herdr` and copy `~/.config/herdr` (Catppuccin Latte theme).
-- **Git name and email.** Already handled by the Omarchy installer: `install/user/git.sh` writes `user.name` and `user.email` from the name and email entered at install. Aliases, `pull.rebase`, and the `gh` credential helper on this machine are extra and are not required to work.
+- **Cursor skills `/dr` and `/save`.** Copy `~/.cursor/skills/dr` and `~/.cursor/skills/save`. `/dr` opens a PlanetScale deploy request from pending Laravel migrations and does not merge it. `/save` writes a short English commit subject. Do not commit these skills to this public repository.
+- **GitHub login.** Name and email are already written by the Omarchy installer. Push and pull on this machine go through `gh`, and that token sits in the login keyring, so it does not come across. On the new machine, install `github-cli` and run `gh auth login` once. That sets the credential helper too.
 - **AWS credentials.** SAM CLI is installed. `~/.aws` is not copied.
-- **TablePlus connections.** The app is installed. Passwords live in `~/.tableplus` and have to be copied to the new machine. Do not commit that directory.
+- **TablePlus.** Done. `vault-sync` copies connection settings and keyring passwords to `~/Dropbox/Vault/tableplus` about every 30 seconds. Do not commit that folder.
 - **Yaak environments.** Requests sync through `~/Dropbox/Vault/yaak`. Environment variables stay on this machine until each environment is marked sharable in Yaak. Do not commit that folder.
 
 ## What stays out of this repository

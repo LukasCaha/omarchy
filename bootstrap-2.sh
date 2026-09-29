@@ -563,29 +563,61 @@ set_desktop() {
   say "CPU temperature sits left of the battery and opens btop. The battery percent sits to the right of the battery icon."
 }
 
-install_work_apps() {
-  local -a wanted=(
-    aws-sam-cli-bin
-    grok-bot-bin
-    fastpotify-bin
-    vlc
-    gimp
-    tableplus
-    yaak-bin
-    qbittorrent
-    obsidian
-  )
+install_repo_pkgs() {
   local -a missing=()
   local pkg
-  for pkg in "${wanted[@]}"; do
-    if ! pkg_present "$pkg"; then
-      missing+=("$pkg")
+  for pkg in "$@"; do
+    if pkg_present "$pkg"; then
+      continue
     fi
+    if ! pacman -Si "$pkg" &>/dev/null; then
+      say "Package $pkg is not in the Omarchy repositories."
+      continue
+    fi
+    missing+=("$pkg")
   done
   if ((${#missing[@]})); then
     omarchy-pkg-add "${missing[@]}"
   fi
+}
+
+install_aur_pkgs() {
+  local pkg
+  if ! command -v omarchy-pkg-aur-add >/dev/null 2>&1; then
+    say "omarchy-pkg-aur-add is missing, so the AUR apps were not installed."
+    return 1
+  fi
+  for pkg in "$@"; do
+    if pkg_present "$pkg"; then
+      continue
+    fi
+    omarchy-pkg-aur-add "$pkg"
+  done
+}
+
+install_work_apps() {
+  # Official repositories. omarchy-pkg-add only calls pacman.
+  install_repo_pkgs aws-cli vlc gimp qbittorrent obsidian python-secretstorage
+  if ! pkg_present yaak; then
+    if pacman -Si yaak &>/dev/null; then
+      omarchy-pkg-add yaak
+    else
+      install_aur_pkgs yaak-bin
+    fi
+  fi
+  # AUR. These names are not in pacman, which is why a single omarchy-pkg-add failed.
+  install_aur_pkgs aws-sam-cli-bin grok-bot-bin fastpotify-bin tableplus
+  install_cursor_agent
   say "Work apps are installed."
+}
+
+install_cursor_agent() {
+  if command -v agent >/dev/null 2>&1; then
+    say "Cursor agent CLI is already installed."
+    return 0
+  fi
+  curl -fsSL https://cursor.com/install | bash
+  say "Cursor agent CLI is installed. The command is agent."
 }
 
 set_qbittorrent_save_path() {

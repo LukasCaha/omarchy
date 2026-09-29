@@ -7,6 +7,8 @@ The richer copy wins when one side is almost empty, so a fresh profile does not
 wipe the Vault. Otherwise the newer file wins.
 """
 
+import base64
+import json
 import os
 import shutil
 import sqlite3
@@ -263,11 +265,159 @@ def shell_startup():
     raise SystemExit(0 if replaced else 1)
 
 
+TABLEPLUS_SCHEMA = "com.tableplus.TablePlusLinux"
+VAULT_TABLEPLUS = os.path.join(HOME, "Dropbox/Vault/tableplus")
+TABLEPLUS_KEYRING = os.path.join(VAULT_TABLEPLUS, "keyring.json")
+TABLEPLUS_SETTINGS = (
+    (
+        os.path.join(HOME, ".tableplus/settings/connections.json"),
+        os.path.join(VAULT_TABLEPLUS, "connections.json"),
+        "text",
+        (),
+    ),
+    (
+        os.path.join(HOME, ".tableplus/settings/connection_groups.json"),
+        os.path.join(VAULT_TABLEPLUS, "connection_groups.json"),
+        "text",
+        (),
+    ),
+)
+
+
+def tableplus_collection():
+    import secretstorage
+
+    bus = secretstorage.dbus_init()
+    collection = secretstorage.get_default_collection(bus)
+    if collection.is_locked():
+        collection.unlock()
+    return collection
+
+
+def tableplus_local_items(collection):
+    found = {}
+    for item in collection.get_all_items():
+        attrs = item.get_attributes() or {}
+        if attrs.get("xdg:schema") != TABLEPLUS_SCHEMA and attrs.get("schema") != TABLEPLUS_SCHEMA:
+            continue
+        key = (attrs.get("id", ""), attrs.get("type", ""))
+        if not key[0] or not key[1]:
+            continue
+        modified = item.get_modified()
+        if hasattr(modified, "isoformat"):
+            modified = modified.isoformat()
+        elif modified is None:
+            modified = ""
+        else:
+            modified = str(modified)
+        record = {
+            "id": key[0],
+            "type": key[1],
+            "label": item.get_label() or f"{TABLEPLUS_SCHEMA}.{key[0]}",
+            "attributes": {str(name): str(value) for name, value in attrs.items()},
+            "secret_b64": base64.b64encode(item.get_secret()).decode("ascii"),
+            "modified": modified,
+        }
+        previous = found.get(key)
+        if previous is None:
+            found[key] = record
+            continue
+        if not record["secret_b64"] and previous["secret_b64"]:
+            continue
+        if record["secret_b64"] and not previous["secret_b64"]:
+            found[key] = record
+            continue
+        if record["modified"] >= previous["modified"]:
+            found[key] = record
+    return found
+
+
+def tableplus_vault_items():
+    if not os.path.isfile(TABLEPLUS_KEYRING):
+        return {}
+    try:
+        with open(TABLEPLUS_KEYRING, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        say(f"could not read TablePlus keyring file: {exc}")
+        return {}
+    found = {}
+    for record in payload.get("items", []):
+        key = (record.get("id", ""), record.get("type", ""))
+        if key[0] and key[1]:
+            found[key] = record
+    return found
+
+
+def write_tableplus_keyring(records):
+    os.makedirs(VAULT_TABLEPLUS, exist_ok=True)
+    payload = {"items": sorted(records.values(), key=lambda record: (record["id"], record["type"]))}
+    tmp = TABLEPLUS_KEYRING + ".partial"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+        handle.write("\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, TABLEPLUS_KEYRING)
+
+
+def sync_tableplus(direction="reconcile"):
+    sync_group(TABLEPLUS_SETTINGS, direction)
+    try:
+        collection = tableplus_collection()
+        local = tableplus_local_items(collection)
+    except Exception as exc:
+        say(f"TablePlus keyring was not synced: {exc}")
+        return
+    vault = tableplus_vault_items()
+    changed = False
+    imported = 0
+    for key in sorted(set(local) | set(vault)):
+        here = local.get(key)
+        there = vault.get(key)
+        if here and there and here["secret_b64"] == there["secret_b64"]:
+            continue
+        if here and there and here["secret_b64"] and not there["secret_b64"]:
+            local_newer = True
+        elif here and there and there["secret_b64"] and not here["secret_b64"]:
+            local_newer = False
+        else:
+            local_newer = here is not None and (there is None or here["modified"] >= there.get("modified", ""))
+        if direction == "pull":
+            local_newer = False
+        if direction == "push":
+            local_newer = here is not None
+        if local_newer:
+            vault[key] = here
+            changed = True
+            continue
+        if there is None or direction == "push":
+            continue
+        secret = base64.b64decode(there["secret_b64"])
+        attributes = {str(name): str(value) for name, value in there.get("attributes", {}).items()}
+        collection.create_item(there["label"], attributes, secret, replace=True)
+        imported += 1
+        vault[key] = there
+    if changed and direction != "pull":
+        write_tableplus_keyring(vault)
+        say(f"copied TablePlus keyring ({len(vault)} items)")
+    elif imported:
+        say(f"restored {imported} TablePlus keyring items")
+
+
 def watch_chromium():
     say("watching Chromium")
+    next_tableplus = 0.0
     while True:
+        now = time.time()
+        if now >= next_tableplus:
+            sync_tableplus("reconcile")
+            next_tableplus = now + 30
         if chromium_running():
             while chromium_running():
+                now = time.time()
+                if now >= next_tableplus:
+                    sync_tableplus("reconcile")
+                    next_tableplus = now + 30
                 time.sleep(2)
             time.sleep(1)
             if chromium_running():
@@ -299,6 +449,8 @@ def main(argv):
             say(f"{decide(local, vault, kind, defaults)} {local}")
         return
     sync_group(selected, command)
+    if target == "all":
+        sync_tableplus(command)
 
 
 if __name__ == "__main__":
