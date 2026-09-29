@@ -44,40 +44,42 @@ archive_excluded() {
   dropbox-cli exclude list 2>/dev/null | grep -q 'Dropbox/Archive'
 }
 
-link_desktop_into_dropbox() {
-  local cloud="$HOME/Dropbox/Desktop"
-  local desk="$HOME/Desktop"
+link_home_dir_into_dropbox() {
+  local name="$1" xdg="$2"
+  local cloud="$HOME/Dropbox/$name"
+  local local_dir="$HOME/$name"
   mkdir -p "$cloud"
-  if [[ -L "$desk" && "$(readlink -f "$desk")" == "$(readlink -f "$cloud")" ]]; then
-    xdg-user-dirs-update --set DESKTOP "$desk"
-    say "Desktop is ~/Dropbox/Desktop."
+  if [[ -L "$local_dir" && "$(readlink -f "$local_dir")" == "$(readlink -f "$cloud")" ]]; then
+    xdg-user-dirs-update --set "$xdg" "$local_dir"
+    say "$name is ~/Dropbox/$name."
     return 0
   fi
-  if [[ -d "$desk" && ! -L "$desk" ]]; then
+  if [[ -d "$local_dir" && ! -L "$local_dir" ]]; then
     local item base
     shopt -s dotglob nullglob
-    for item in "$desk"/*; do
+    for item in "$local_dir"/*; do
       base="$(basename "$item")"
       if [[ -e "$cloud/$base" ]]; then
-        say "Left $base in ~/Desktop because ~/Dropbox/Desktop already has it."
+        say "Left $base in ~/$name because ~/Dropbox/$name already has it."
         continue
       fi
       mv "$item" "$cloud/$base"
     done
     shopt -u dotglob nullglob
-    if ! rmdir "$desk" 2>/dev/null; then
-      say "Desktop still has files that were not moved, so it was not switched to Dropbox."
+    if ! rmdir "$local_dir" 2>/dev/null; then
+      say "$name still has files that were not moved, so it was not switched to Dropbox."
       return 0
     fi
   fi
-  ln -s "$cloud" "$desk"
-  xdg-user-dirs-update --set DESKTOP "$desk"
-  say "Desktop is ~/Dropbox/Desktop."
+  ln -s "$cloud" "$local_dir"
+  xdg-user-dirs-update --set "$xdg" "$local_dir"
+  say "$name is ~/Dropbox/$name."
 }
 
 set_nautilus_bookmarks() {
   # Omarchy sets the desktop directory to $HOME, so no Desktop folder exists.
-  link_desktop_into_dropbox
+  link_home_dir_into_dropbox Desktop DESKTOP
+  link_home_dir_into_dropbox Downloads DOWNLOAD
   mkdir -p "$HOME/Torrents"
   local bookmarks="$HOME/.config/gtk-3.0/bookmarks"
   mkdir -p "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"
